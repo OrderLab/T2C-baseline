@@ -25,3 +25,6 @@ Follow each readme to use it
 1. [ZK1208](./ZK1208.md)
 2. [ZK2355](./ZK2355.md)
 3. [ZK4362](./ZK4362.md)
+
+## Throughput and false positive experiments
+For throughput and false positive experiments, use run system based on the versions in Table 2, and then run the workload as usual
