@@ -1,0 +1,153 @@
+diff --git a/bin/zkEnv.sh b/bin/zkEnv.sh
+index 8d93a50c..f1d67b85 100755
+--- a/bin/zkEnv.sh
++++ b/bin/zkEnv.sh
+@@ -121,6 +121,8 @@ do
+    CLASSPATH="$d:$CLASSPATH"
+ done
+ 
++CLASSPATH="$ZOOBINDIR/../../Semantic-Daikon-Checker/target/*:$CLASSPATH"
++
+ #make it work for developers
+ CLASSPATH="$ZOOBINDIR/../build/classes:$CLASSPATH"
+ 
+diff --git a/bin/zkServer.sh b/bin/zkServer.sh
+index 5be02c15..a183a1e2 100755
+--- a/bin/zkServer.sh
++++ b/bin/zkServer.sh
+@@ -158,7 +158,7 @@ start)
+     nohup "$JAVA" $ZOO_DATADIR_AUTOCREATE "-Dzookeeper.log.dir=${ZOO_LOG_DIR}" \
+     "-Dzookeeper.log.file=${ZOO_LOG_FILE}" "-Dzookeeper.root.logger=${ZOO_LOG4J_PROP}" \
+     -XX:+HeapDumpOnOutOfMemoryError -XX:OnOutOfMemoryError='kill -9 %p' \
+-    -cp "$CLASSPATH" $JVMFLAGS $ZOOMAIN "$ZOOCFG" > "$_ZOO_DAEMON_OUT" 2>&1 < /dev/null &
++    -cp "$CLASSPATH" $JVMFLAGS -Ddaikon.checkratio=0.99 $ZOOMAIN "$ZOOCFG" > "$_ZOO_DAEMON_OUT" 2>&1 < /dev/null &
+     if [ $? -eq 0 ]
+     then
+       case "$OSTYPE" in
+diff --git a/zookeeper-server/pom.xml b/zookeeper-server/pom.xml
+index d822264d..62fc9802 100755
+--- a/zookeeper-server/pom.xml
++++ b/zookeeper-server/pom.xml
+@@ -33,6 +33,13 @@
+   <description>ZooKeeper server</description>
+ 
+   <dependencies>
++    <dependency>
++      <groupId>daikon</groupId>
++      <artifactId>Semantic-Daikon-Checker</artifactId>
++      <version>1.0</version>
++      <scope>system</scope>
++      <systemPath>${project.basedir}/../../Semantic-Daikon-Checker/target/Semantic-Daikon-checker-1.0-SNAPSHOT-jar-with-dependencies.jar</systemPath>
++    </dependency>
+     <dependency>
+       <groupId>com.github.spotbugs</groupId>
+       <artifactId>spotbugs-annotations</artifactId>
+diff --git a/zookeeper-server/src/main/java/org/apache/zookeeper/server/ZKDatabase.java b/zookeeper-server/src/main/java/org/apache/zookeeper/server/ZKDatabase.java
+index 893eb0af..83c471df 100644
+--- a/zookeeper-server/src/main/java/org/apache/zookeeper/server/ZKDatabase.java
++++ b/zookeeper-server/src/main/java/org/apache/zookeeper/server/ZKDatabase.java
+@@ -18,6 +18,9 @@
+ 
+ package org.apache.zookeeper.server;
+ 
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.InvariantChecker;
+ import java.io.File;
+ import java.io.IOException;
+ import java.io.PrintWriter;
+@@ -67,6 +70,7 @@
+  * and snapshots from the disk.
+  */
+ public class ZKDatabase {
++    public static ZKDatabase zkDbInstance = null;
+ 
+     private static final Logger LOG = LoggerFactory.getLogger(ZKDatabase.class);
+ 
+@@ -150,6 +154,7 @@ public ZKDatabase(FileTxnSnapLog snapLog) {
+             commitLogCount = DEFAULT_COMMIT_LOG_COUNT;
+         }
+         LOG.info("{}={}", COMMIT_LOG_COUNT, commitLogCount);
++        zkDbInstance = this;
+     }
+ 
+     /**
+@@ -639,8 +644,36 @@ public void serializeSnapshot(OutputArchive oa) throws IOException, InterruptedE
+     public boolean append(Request si) throws IOException {
+         if (this.snapLog.append(si)) {
+             txnCount.incrementAndGet();
++            LOG.info("DIMAS: " + GlobalState.mode.toString());
++            switch (GlobalState.mode)
++            {
++                case TEST:
++                    //CHANG: we expose states at the entry of all requests
++                    DaikonLogger.getLogger().dumpStates();
++                    break;
++                case PRODUCTION:
++                    InvariantChecker.assertAll();
++                    break;
++                case ASSERTING:
++                    LOG.trace("Asserting, so skip another triggered");
++                    break;
++            }
+             return true;
+         }
++        LOG.info("DIMAS: " + GlobalState.mode.toString());
++        switch (GlobalState.mode)
++        {
++            case TEST:
++                //CHANG: we expose states at the entry of all requests
++                DaikonLogger.getLogger().dumpStates();
++                break;
++            case PRODUCTION:
++                InvariantChecker.assertAll();
++                break;
++            case ASSERTING:
++                LOG.trace("Asserting, so skip another triggered");
++                break;
++        }
+         return false;
+     }
+ 
+diff --git a/zookeeper-server/src/main/java/org/apache/zookeeper/server/ZooKeeperServer.java b/zookeeper-server/src/main/java/org/apache/zookeeper/server/ZooKeeperServer.java
+index 7adfb9e1..57c5a217 100644
+--- a/zookeeper-server/src/main/java/org/apache/zookeeper/server/ZooKeeperServer.java
++++ b/zookeeper-server/src/main/java/org/apache/zookeeper/server/ZooKeeperServer.java
+@@ -18,6 +18,11 @@
+ 
+ package org.apache.zookeeper.server;
+ 
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.Pair;
++import java.lang.reflect.Field;
++import java.util.*;
+ import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+ import java.io.ByteArrayOutputStream;
+ import java.io.File;
+@@ -92,6 +97,8 @@
+  * PrepRequestProcessor -&gt; SyncRequestProcessor -&gt; FinalRequestProcessor
+  */
+ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
++    //CHANG: for testing use
++    public static ZooKeeperServer zksInstance = null;
+ 
+     protected static final Logger LOG;
+ 
+@@ -361,6 +368,7 @@ public ZooKeeperServer(FileTxnSnapLog txnLogFactory, int tickTime, int minSessio
+             getClientPortListenBacklog(),
+             txnLogFactory.getDataDir(),
+             txnLogFactory.getSnapDir());
++        zksInstance = this;
+     }
+ 
+     public String getInitialConfig() {
+@@ -711,6 +719,8 @@ private void startupWithServerState(State state) {
+ 
+         setState(state);
+ 
++        // GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
++
+         requestPathMetricsCollector.start();
+ 
+         localSessionEnabled = sessionTracker.isLocalSessionsEnabled();

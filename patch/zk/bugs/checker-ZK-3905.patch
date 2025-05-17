@@ -1,0 +1,155 @@
+diff --git a/bin/zkEnv.sh b/bin/zkEnv.sh
+index 8d93a50c..f1d67b85 100755
+--- a/bin/zkEnv.sh
++++ b/bin/zkEnv.sh
+@@ -121,6 +121,8 @@ do
+    CLASSPATH="$d:$CLASSPATH"
+ done
+ 
++CLASSPATH="$ZOOBINDIR/../../Semantic-Daikon-Checker/target/*:$CLASSPATH"
++
+ #make it work for developers
+ CLASSPATH="$ZOOBINDIR/../build/classes:$CLASSPATH"
+ 
+diff --git a/bin/zkServer.sh b/bin/zkServer.sh
+index bfeb9ce2..819c7fc8 100755
+--- a/bin/zkServer.sh
++++ b/bin/zkServer.sh
+@@ -158,7 +158,7 @@ start)
+     nohup "$JAVA" $ZOO_DATADIR_AUTOCREATE "-Dzookeeper.log.dir=${ZOO_LOG_DIR}" \
+     "-Dzookeeper.log.file=${ZOO_LOG_FILE}" "-Dzookeeper.root.logger=${ZOO_LOG4J_PROP}" \
+     -XX:+HeapDumpOnOutOfMemoryError -XX:OnOutOfMemoryError='kill -9 %p' \
+-    -cp "$CLASSPATH" $JVMFLAGS $ZOOMAIN "$ZOOCFG" > "$_ZOO_DAEMON_OUT" 2>&1 < /dev/null &
++    -cp "$CLASSPATH" $JVMFLAGS -Ddaikon.checkratio=0.99 $ZOOMAIN "$ZOOCFG" > "$_ZOO_DAEMON_OUT" 2>&1 < /dev/null &
+     if [ $? -eq 0 ]
+     then
+       case "$OSTYPE" in
+diff --git a/zookeeper-server/pom.xml b/zookeeper-server/pom.xml
+index 9eba9414..ee74e122 100755
+--- a/zookeeper-server/pom.xml
++++ b/zookeeper-server/pom.xml
+@@ -33,6 +33,13 @@
+   <description>ZooKeeper server</description>
+ 
+   <dependencies>
++    <dependency>
++      <groupId>daikon</groupId>
++      <artifactId>Semantic-Daikon-Checker</artifactId>
++      <version>1.0</version>
++      <scope>system</scope>
++      <systemPath>${project.basedir}/../../Semantic-Daikon-Checker/target/Semantic-Daikon-checker-1.0-SNAPSHOT-jar-with-dependencies.jar</systemPath>
++    </dependency>
+     <dependency>
+       <groupId>com.github.spotbugs</groupId>
+       <artifactId>spotbugs-annotations</artifactId>
+# diff --git a/zookeeper-server/src/main/java/org/apache/zookeeper/server/NettyServerCnxn.java b/zookeeper-server/src/main/java/org/apache/zookeeper/server/NettyServerCnxn.java
+# index e6f3495a..05be27b0 100644
+# --- a/zookeeper-server/src/main/java/org/apache/zookeeper/server/NettyServerCnxn.java
+# +++ b/zookeeper-server/src/main/java/org/apache/zookeeper/server/NettyServerCnxn.java
+# @@ -18,6 +18,9 @@
+ 
+#  package org.apache.zookeeper.server;
+ 
+# +import daikon.DaikonLogger;
+# +import daikon.GlobalState;
+# +import daikon.InvariantChecker;
+#  import java.io.BufferedWriter;
+#  import java.io.IOException;
+#  import java.io.PrintWriter;
+# @@ -102,6 +105,19 @@ public void close() {
+#              if (LOG.isDebugEnabled()) {
+#                  LOG.debug("cnxns size:{}", factory.cnxns.size());
+#              }
+# +            LOG.info("DIMAS: " + GlobalState.mode.toString());
+# +            switch (GlobalState.mode) {
+# +                case TEST:
+# +                    // CHANG: we expose states at the entry of all requests
+# +                    DaikonLogger.getLogger().dumpStates();
+# +                    break;
+# +                case PRODUCTION:
+# +                    InvariantChecker.assertAll();
+# +                    break;
+# +                case ASSERTING:
+# +                    LOG.trace("Asserting, so skip another triggered");
+# +                    break;
+# +            }
+#              return;
+#          }
+#          if (LOG.isDebugEnabled()) {
+diff --git a/zookeeper-server/src/main/java/org/apache/zookeeper/server/PrepRequestProcessor.java b/zookeeper-server/src/main/java/org/apache/zookeeper/server/PrepRequestProcessor.java
+index 0275ebac..9967fa1e 100644
+--- a/zookeeper-server/src/main/java/org/apache/zookeeper/server/PrepRequestProcessor.java
++++ b/zookeeper-server/src/main/java/org/apache/zookeeper/server/PrepRequestProcessor.java
+@@ -18,6 +18,9 @@
+ 
+ package org.apache.zookeeper.server;
+ 
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.InvariantChecker;
+ import org.apache.jute.BinaryOutputArchive;
+ import org.apache.jute.Record;
+ import org.apache.zookeeper.CreateMode;
+@@ -734,6 +737,20 @@ protected void pRequest(Request request) throws RequestProcessorException {
+         // request.type + " id = 0x" + Long.toHexString(request.sessionId));
+         request.setHdr(null);
+         request.setTxn(null);
++        LOG.info("DIMAS: " + GlobalState.mode.toString());
++        switch (GlobalState.mode)
++        {
++            case TEST:
++                //CHANG: we expose states at the entry of all requests
++                DaikonLogger.getLogger().dumpStates();
++                break;
++            case PRODUCTION:
++                InvariantChecker.assertAll();
++                break;
++            case ASSERTING:
++                LOG.trace("Asserting, so skip another triggered");
++                break;
++        }
+ 
+         try {
+             switch (request.type) {
+diff --git a/zookeeper-server/src/main/java/org/apache/zookeeper/server/ZooKeeperServer.java b/zookeeper-server/src/main/java/org/apache/zookeeper/server/ZooKeeperServer.java
+index 8293f047..b3e962b9 100644
+--- a/zookeeper-server/src/main/java/org/apache/zookeeper/server/ZooKeeperServer.java
++++ b/zookeeper-server/src/main/java/org/apache/zookeeper/server/ZooKeeperServer.java
+@@ -18,6 +18,11 @@
+ 
+ package org.apache.zookeeper.server;
+ 
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.Pair;
++import java.lang.reflect.Field;
++import java.util.*;
+ import java.io.ByteArrayOutputStream;
+ import java.io.File;
+ import java.io.IOException;
+@@ -80,6 +85,9 @@
+  * PrepRequestProcessor -> SyncRequestProcessor -> FinalRequestProcessor
+  */
+ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
++    //CHANG: for testing use
++    public static ZooKeeperServer zksInstance = null;
++
+     protected static final Logger LOG;
+ 
+     static {
+@@ -168,6 +176,7 @@ public ZooKeeperServer(FileTxnSnapLog txnLogFactory, int tickTime,
+                 + " maxSessionTimeout " + getMaxSessionTimeout()
+                 + " datadir " + txnLogFactory.getDataDir()
+                 + " snapdir " + txnLogFactory.getSnapDir());
++        zksInstance = this;
+     }
+ 
+     /**
+@@ -461,6 +470,7 @@ public synchronized void startup() {
+         registerJMX();
+ 
+         setState(State.RUNNING);
++        GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
+         notifyAll();
+     }
+ 

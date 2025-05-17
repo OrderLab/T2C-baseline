@@ -1,0 +1,90 @@
+diff --git a/build.xml b/build.xml
+index ff1695be4f..7224df195b 100644
+--- a/build.xml
++++ b/build.xml
+@@ -164,6 +164,9 @@
+             <exclude name="**/*-sources.jar"/>
+             <exclude name="**/ant-*.jar"/>
+         </fileset>
++        <fileset dir="/localtmp/daikon/Semantic-Daikon-Checker/target/">
++            <include name="Semantic-Daikon-checker-1.0-SNAPSHOT-jar-with-dependencies.jar" />
++        </fileset>
+     </path>
+ 
+   <macrodef name="create-javadoc">
+@@ -823,6 +826,7 @@
+             name="build-project">
+         <echo message="${ant.project.name}: ${ant.file}"/>
+         <!-- Order matters! -->
++
+         <javac fork="true"
+                debug="true" debuglevel="${debuglevel}" encoding="utf-8"
+                destdir="${build.classes.thrift}" includeantruntime="false" source="${source.version}" target="${target.version}"
+diff --git a/src/java/org/apache/cassandra/cql3/QueryProcessor.java b/src/java/org/apache/cassandra/cql3/QueryProcessor.java
+index ef0ff12414..0ffc3d5911 100644
+--- a/src/java/org/apache/cassandra/cql3/QueryProcessor.java
++++ b/src/java/org/apache/cassandra/cql3/QueryProcessor.java
+@@ -17,6 +17,7 @@
+  */
+ package org.apache.cassandra.cql3;
+ 
++import daikon.GlobalState;
+ import java.nio.ByteBuffer;
+ import java.util.*;
+ import java.util.concurrent.ConcurrentHashMap;
+@@ -310,6 +311,7 @@ public class QueryProcessor implements QueryHandler
+     public static UntypedResultSet executeInternal(String query, Object... values)
+     {
+         ParsedStatement.Prepared prepared = prepareInternal(query);
++        GlobalState.triggerEvent();
+         ResultMessage result = prepared.statement.executeInternal(internalQueryState(), makeInternalOptions(prepared, values));
+         if (result instanceof ResultMessage.Rows)
+             return UntypedResultSet.create(((ResultMessage.Rows)result).result);
+@@ -328,6 +330,7 @@ public class QueryProcessor implements QueryHandler
+     {
+         try
+         {
++            GlobalState.triggerEvent();
+             ParsedStatement.Prepared prepared = prepareInternal(query);
+             ResultMessage result = prepared.statement.execute(state, makeInternalOptions(prepared, values, cl), System.nanoTime());
+             if (result instanceof ResultMessage.Rows)
+diff --git a/src/java/org/apache/cassandra/transport/Server.java b/src/java/org/apache/cassandra/transport/Server.java
+index 212839c94d..f4a080cf3a 100644
+--- a/src/java/org/apache/cassandra/transport/Server.java
++++ b/src/java/org/apache/cassandra/transport/Server.java
+@@ -17,6 +17,9 @@
+  */
+ package org.apache.cassandra.transport;
+ 
++import daikon.GlobalState;
++import daikon.DaikonLogger;
++import daikon.Pair;
+ import java.io.IOException;
+ import java.net.InetAddress;
+ import java.net.InetSocketAddress;
+@@ -56,6 +59,7 @@ import org.apache.cassandra.utils.FBUtilities;
+ 
+ public class Server implements CassandraDaemon.Server
+ {
++    public static Server serverInstance = null;
+     static
+     {
+         InternalLoggerFactory.setDefaultFactory(new Slf4JLoggerFactory());
+@@ -101,6 +105,8 @@ public class Server implements CassandraDaemon.Server
+         EventNotifier notifier = new EventNotifier(this);
+         StorageService.instance.register(notifier);
+         MigrationManager.instance.register(notifier);
++
++        serverInstance = this;
+     }
+ 
+     public void stop()
+@@ -161,6 +167,8 @@ public class Server implements CassandraDaemon.Server
+ 
+         connectionTracker.allChannels.add(bindFuture.channel());
+         isRunning.set(true);
++
++        GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
+     }
+ 
+     public int getConnectedClients()

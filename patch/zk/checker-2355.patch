@@ -1,0 +1,177 @@
+diff --git a/bin/zkEnv.sh b/bin/zkEnv.sh
+index 9806a4b50..07e8d3fb0 100755
+--- a/bin/zkEnv.sh
++++ b/bin/zkEnv.sh
+@@ -110,6 +110,8 @@ do
+     CLASSPATH="$i:$CLASSPATH"
+ done
+ 
++CLASSPATH="$ZOOBINDIR/../../Semantic-Daikon-Checker/target/*:$CLASSPATH"
++
+ #make it work for developers
+ for d in "$ZOOBINDIR"/../build/lib/*.jar
+ do
+diff --git a/bin/zkServer.sh b/bin/zkServer.sh
+index e4e01e86e..9fd4ffd37 100755
+--- a/bin/zkServer.sh
++++ b/bin/zkServer.sh
+@@ -158,7 +158,7 @@ start)
+     nohup "$JAVA" $ZOO_DATADIR_AUTOCREATE "-Dzookeeper.log.dir=${ZOO_LOG_DIR}" \
+     "-Dzookeeper.log.file=${ZOO_LOG_FILE}" "-Dzookeeper.root.logger=${ZOO_LOG4J_PROP}" \
+     -XX:+HeapDumpOnOutOfMemoryError -XX:OnOutOfMemoryError='kill -9 %p' \
+-    -cp "$CLASSPATH" $JVMFLAGS $ZOOMAIN "$ZOOCFG" > "$_ZOO_DAEMON_OUT" 2>&1 < /dev/null &
++    -cp "$CLASSPATH" $JVMFLAGS -Ddaikon.checkratio=1 $ZOOMAIN "$ZOOCFG" > "$_ZOO_DAEMON_OUT" 2>&1 < /dev/null &
+     if [ $? -eq 0 ]
+     then
+       case "$OSTYPE" in
+diff --git a/build.xml b/build.xml
+index 7dda3aea0..b37a5dfa5 100644
+--- a/build.xml
++++ b/build.xml
+@@ -218,6 +218,9 @@ xmlns:cs="antlib:com.puppycrawl.tools.checkstyle.ant">
+         <include name="${lib.dir.includes}" />
+         <exclude name="${lib.dir.excludes}" />
+       </fileset>
++      <fileset dir="${basedir}/../Semantic-Daikon-Checker/target">
++            <include name="*.jar" />
++      </fileset>
+       <fileset dir="${ant.home}/lib">
+         <include name="ant.jar" />
+       </fileset>
+diff --git a/src/java/main/org/apache/zookeeper/server/PrepRequestProcessor.java b/src/java/main/org/apache/zookeeper/server/PrepRequestProcessor.java
+index 63b35abeb..c73d5a24b 100644
+--- a/src/java/main/org/apache/zookeeper/server/PrepRequestProcessor.java
++++ b/src/java/main/org/apache/zookeeper/server/PrepRequestProcessor.java
+@@ -81,6 +81,10 @@
+ import java.util.Set;
+ import java.util.concurrent.LinkedBlockingQueue;
+ 
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.InvariantChecker;
++
+ /**
+  * This request processor is generally at the start of a RequestProcessor
+  * change. It sets up any transactions associated with requests that change the
+@@ -741,6 +745,24 @@ protected void pRequest(Request request) throws RequestProcessorException {
+         request.setHdr(null);
+         request.setTxn(null);
+ 
++        switch (GlobalState.mode)
++        {
++            case TEST:
++                //CHANG: we expose states at the entry of all requests
++                try {
++                    DaikonLogger.getLogger().dumpStates();
++                } catch (Exception e) {
++                    // TODO: handle exception
++                }
++                break;
++            case PRODUCTION:
++                InvariantChecker.assertAll();
++                break;
++            case ASSERTING:
++                LOG.trace("Asserting, so skip another triggered");
++                break;
++        }
++
+         try {
+             switch (request.type) {
+             case OpCode.createContainer:
+diff --git a/src/java/main/org/apache/zookeeper/server/ZooKeeperServer.java b/src/java/main/org/apache/zookeeper/server/ZooKeeperServer.java
+index f45ac0906..db32ff418 100644
+--- a/src/java/main/org/apache/zookeeper/server/ZooKeeperServer.java
++++ b/src/java/main/org/apache/zookeeper/server/ZooKeeperServer.java
+@@ -70,6 +70,11 @@
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ 
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.Pair;
++import java.lang.reflect.Field;
++import java.util.*;
+ 
+ /**
+  * This class implements a simple standalone ZooKeeperServer. It sets up the
+@@ -79,6 +84,9 @@
+ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
+     protected static final Logger LOG;
+ 
++    //CHANG: for testing use
++    public static ZooKeeperServer zksInstance = null;
++
+     static {
+         LOG = LoggerFactory.getLogger(ZooKeeperServer.class);
+ 
+@@ -163,6 +171,61 @@ public ZooKeeperServer(FileTxnSnapLog txnLogFactory, int tickTime,
+                 + " snapdir " + txnLogFactory.getSnapDir());
+     }
+ 
++    //just save for future reference
++//    public static void dumpStatesSample()
++//    {
++//        if(zksInstance == null)
++//        {
++//            throw new RuntimeException("CHANG: zksInstance is null!");
++//        }
++//
++//        ArrayList<Pair<DaikonLogger.Var, Object>> lst = new ArrayList<>();
++//
++//        ArrayList<Long> sessions = new ArrayList<>();
++//        for(Long sessionID: ((SessionTrackerImpl)zksInstance.sessionTracker).sessionsById.keySet())
++//            sessions.add(sessionID);
++//        lst.add(new Pair<DaikonLogger.Var, Object>(
++//                new DaikonLogger.Var("Sessions_from_sessionsById", "java.lang.Object[]"), sessions));
++//
++//        ArrayList<Long> sessionsFromSessionTimeouts = new ArrayList<>();
++//        for(Long sessionID: ((SessionTrackerImpl)zksInstance.sessionTracker).sessionsWithTimeout.keySet())
++//            sessionsFromSessionTimeouts.add(sessionID);
++//        lst.add(new Pair<DaikonLogger.Var, Object>(
++//                new DaikonLogger.Var("Sessions_from_sessionsWithTimeout", "java.lang.Object[]"),
++//                sessionsFromSessionTimeouts));
++//
++//        ArrayList<Long> sessionsFromSessionMap = new ArrayList<>();
++//        for(Long sessionID: ((NIOServerCnxnFactory)zksInstance.serverCnxnFactory).sessionMap.keySet())
++//            sessionsFromSessionMap.add(sessionID);
++//        lst.add(new Pair<DaikonLogger.Var, Object>(
++//                new DaikonLogger.Var("Sessions_from_sessionMap", "java.lang.Object[]"),
++//                sessionsFromSessionMap));
++//
++//        ArrayList<Long> ephemeralOwners = new ArrayList<>();
++//        for(Long sessionID: zksInstance.getEphemerals().keySet())
++//            ephemeralOwners.add(sessionID);
++//        lst.add(new Pair<DaikonLogger.Var, Object>(
++//                new DaikonLogger.Var("EphemeralOwners", "java.lang.Object[]"),
++//                ephemeralOwners));
++//
++//        lst.add(new Pair<DaikonLogger.Var, Object>(
++//                new DaikonLogger.Var("minSessionTimeout", "int"),
++//                zksInstance.minSessionTimeout));
++//
++//        lst.add(new Pair<DaikonLogger.Var, Object>(
++//                new DaikonLogger.Var("maxSessionTimeout", "int"),
++//                zksInstance.maxSessionTimeout));
++//
++//        lst.add(new Pair<DaikonLogger.Var, Object>(
++//                new DaikonLogger.Var("SKIP_ACL", "java.lang.String"),
++//                SKIP_ACL));
++//        lst.add(new Pair<DaikonLogger.Var, Object>(
++//                new DaikonLogger.Var("SKIP_ACL2", "java.lang.String"),
++//                SKIP_ACL));
++//
++//        //DaikonLogger.getLogger().addPoint(lst);
++//    }
++
+     /**
+      * creates a zookeeperserver instance.
+      * @param txnLogFactory the file transaction snapshot logging class
+@@ -454,6 +517,8 @@ public synchronized void startup() {
+         registerJMX();
+ 
+         setState(State.RUNNING);
++        zksInstance = this;
++        GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
+         notifyAll();
+     }
+ 

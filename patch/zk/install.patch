@@ -1,0 +1,127 @@
+diff --git a/src/java/main/org/apache/zookeeper/server/PrepRequestProcessor.java b/src/java/main/org/apache/zookeeper/server/PrepRequestProcessor.java
+index 63b35abe..1a2104a8 100644
+--- a/src/java/main/org/apache/zookeeper/server/PrepRequestProcessor.java
++++ b/src/java/main/org/apache/zookeeper/server/PrepRequestProcessor.java
+@@ -81,6 +81,10 @@
+ import java.util.Set;
+ import java.util.concurrent.LinkedBlockingQueue;
+ 
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.InvariantChecker;
++
+ /**
+  * This request processor is generally at the start of a RequestProcessor
+  * change. It sets up any transactions associated with requests that change the
+@@ -741,6 +745,20 @@ protected void pRequest(Request request) throws RequestProcessorException {
+         request.setHdr(null);
+         request.setTxn(null);
+ 
++        switch (GlobalState.mode)
++        {
++            case TEST:
++                //CHANG: we expose states at the entry of all requests
++                DaikonLogger.getLogger().dumpStates();
++                break;
++            case PRODUCTION:
++                InvariantChecker.assertAll();
++                break;
++            case ASSERTING:
++                LOG.trace("Asserting, so skip another triggered");
++                break;
++        }
++
+         try {
+             switch (request.type) {
+             case OpCode.createContainer:
+diff --git a/src/java/main/org/apache/zookeeper/server/ZooKeeperServer.java b/src/java/main/org/apache/zookeeper/server/ZooKeeperServer.java
+index f45ac090..3d0d6de0 100644
+--- a/src/java/main/org/apache/zookeeper/server/ZooKeeperServer.java
++++ b/src/java/main/org/apache/zookeeper/server/ZooKeeperServer.java
+@@ -70,6 +70,10 @@
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ 
++import daikon.DaikonLogger;
++import daikon.Pair;
++import java.lang.reflect.Field;
++import java.util.*;
+ 
+ /**
+  * This class implements a simple standalone ZooKeeperServer. It sets up the
+@@ -79,6 +83,9 @@
+ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
+     protected static final Logger LOG;
+ 
++    //CHANG: for testing use
++    public static ZooKeeperServer zksInstance = null;
++
+     static {
+         LOG = LoggerFactory.getLogger(ZooKeeperServer.class);
+ 
+@@ -161,7 +168,64 @@ public ZooKeeperServer(FileTxnSnapLog txnLogFactory, int tickTime,
+                 + " maxSessionTimeout " + getMaxSessionTimeout()
+                 + " datadir " + txnLogFactory.getDataDir()
+                 + " snapdir " + txnLogFactory.getSnapDir());
+-    }
++
++        zksInstance = this;
++    }
++
++    //just save for future reference
++//    public static void dumpStatesSample()
++//    {
++//        if(zksInstance == null)
++//        {
++//            throw new RuntimeException("CHANG: zksInstance is null!");
++//        }
++//
++//        ArrayList<Pair<DaikonLogger.Var, Object>> lst = new ArrayList<>();
++//
++//        ArrayList<Long> sessions = new ArrayList<>();
++//        for(Long sessionID: ((SessionTrackerImpl)zksInstance.sessionTracker).sessionsById.keySet())
++//            sessions.add(sessionID);
++//        lst.add(new Pair<DaikonLogger.Var, Object>(
++//                new DaikonLogger.Var("Sessions_from_sessionsById", "java.lang.Object[]"), sessions));
++//
++//        ArrayList<Long> sessionsFromSessionTimeouts = new ArrayList<>();
++//        for(Long sessionID: ((SessionTrackerImpl)zksInstance.sessionTracker).sessionsWithTimeout.keySet())
++//            sessionsFromSessionTimeouts.add(sessionID);
++//        lst.add(new Pair<DaikonLogger.Var, Object>(
++//                new DaikonLogger.Var("Sessions_from_sessionsWithTimeout", "java.lang.Object[]"),
++//                sessionsFromSessionTimeouts));
++//
++//        ArrayList<Long> sessionsFromSessionMap = new ArrayList<>();
++//        for(Long sessionID: ((NIOServerCnxnFactory)zksInstance.serverCnxnFactory).sessionMap.keySet())
++//            sessionsFromSessionMap.add(sessionID);
++//        lst.add(new Pair<DaikonLogger.Var, Object>(
++//                new DaikonLogger.Var("Sessions_from_sessionMap", "java.lang.Object[]"),
++//                sessionsFromSessionMap));
++//
++//        ArrayList<Long> ephemeralOwners = new ArrayList<>();
++//        for(Long sessionID: zksInstance.getEphemerals().keySet())
++//            ephemeralOwners.add(sessionID);
++//        lst.add(new Pair<DaikonLogger.Var, Object>(
++//                new DaikonLogger.Var("EphemeralOwners", "java.lang.Object[]"),
++//                ephemeralOwners));
++//
++//        lst.add(new Pair<DaikonLogger.Var, Object>(
++//                new DaikonLogger.Var("minSessionTimeout", "int"),
++//                zksInstance.minSessionTimeout));
++//
++//        lst.add(new Pair<DaikonLogger.Var, Object>(
++//                new DaikonLogger.Var("maxSessionTimeout", "int"),
++//                zksInstance.maxSessionTimeout));
++//
++//        lst.add(new Pair<DaikonLogger.Var, Object>(
++//                new DaikonLogger.Var("SKIP_ACL", "java.lang.String"),
++//                SKIP_ACL));
++//        lst.add(new Pair<DaikonLogger.Var, Object>(
++//                new DaikonLogger.Var("SKIP_ACL2", "java.lang.String"),
++//                SKIP_ACL));
++//
++//        //DaikonLogger.getLogger().addPoint(lst);
++//    }
+ 
+     /**
+      * creates a zookeeperserver instance.

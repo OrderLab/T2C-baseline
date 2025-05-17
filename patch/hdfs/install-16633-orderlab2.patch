@@ -1,0 +1,321 @@
+diff --git a/hadoop-common-project/hadoop-common/src/main/bin/hadoop-functions.sh b/hadoop-common-project/hadoop-common/src/main/bin/hadoop-functions.sh
+index 847240d6579..725f8af39dd 100755
+--- a/hadoop-common-project/hadoop-common/src/main/bin/hadoop-functions.sh
++++ b/hadoop-common-project/hadoop-common/src/main/bin/hadoop-functions.sh
+@@ -1797,6 +1797,7 @@ function hadoop_start_daemon
+     hadoop_error "ERROR:  Cannot write ${command} pid ${pidfile}."
+   fi
+ 
++  CLASSPATH="${HADOOP_HOME}/../../../../Semantic-Daikon-Checker/target/*:$CLASSPATH"
+   export CLASSPATH
+   #shellcheck disable=SC2086
+   exec "${JAVA}" "-Dproc_${command}" ${HADOOP_OPTS} "${class}" "$@"
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/pom.xml b/hadoop-hdfs-project/hadoop-hdfs/pom.xml
+index dfcb1dd435c..fdbfb632401 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/pom.xml
++++ b/hadoop-hdfs-project/hadoop-hdfs/pom.xml
+@@ -35,7 +35,21 @@ http://maven.apache.org/xsd/maven-4.0.0.xsd">
+     <is.hadoop.component>true</is.hadoop.component>
+   </properties>
+ 
++  <!-- <repositories>
++    <repository>
++        <id>local-maven-repo</id>
++        <url>file:///${project.basedir}/local-maven-repo</url>
++    </repository>
++  </repositories> -->
++
+   <dependencies>
++    <dependency>
++      <groupId>daikon</groupId>
++      <artifactId>Semantic-Daikon-Checker</artifactId>
++      <version>1.0</version>
++      <scope>system</scope>
++      <systemPath>/home/dparikesit/Projects/garudaAce/Semantic-Daikon-Checker/target/Semantic-Daikon-checker-1.0-SNAPSHOT.jar</systemPath>
++    </dependency>
+     <dependency>
+       <groupId>org.apache.hadoop</groupId>
+       <artifactId>hadoop-annotations</artifactId>
+@@ -220,7 +234,11 @@ http://maven.apache.org/xsd/maven-4.0.0.xsd">
+         <groupId>org.apache.maven.plugins</groupId>
+         <artifactId>maven-surefire-plugin</artifactId>
+         <configuration>
++          <argLine>-Xmx16G</argLine>
++          <parallel>suites</parallel>
++          <useUnlimitedThreads>true</useUnlimitedThreads>
+           <systemPropertyVariables>
++            <daikon.app.target>hdfs</daikon.app.target>
+             <startKdc>${startKdc}</startKdc>
+             <kdc.resource.dir>${kdc.resource.dir}</kdc.resource.dir>
+             <runningWithNative>${runningWithNative}</runningWithNative>
+@@ -228,7 +246,7 @@ http://maven.apache.org/xsd/maven-4.0.0.xsd">
+           <properties>
+             <property>
+               <name>listener</name>
+-              <value>org.apache.hadoop.test.TimedOutTestsListener</value>
++              <value>t2c.TestListener</value>
+             </property>
+           </properties>
+         </configuration>
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockIdManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockIdManager.java
+index 5eebe8e2e51..4525ff7252e 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockIdManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockIdManager.java
+@@ -17,6 +17,7 @@
+  */
+ package org.apache.hadoop.hdfs.server.blockmanagement;
+ 
++import daikon.GlobalState;
+ import com.google.common.annotations.VisibleForTesting;
+ import com.google.common.base.Preconditions;
+ import org.apache.hadoop.hdfs.protocol.Block;
+@@ -81,6 +82,8 @@ public long upgradeLegacyGenerationStamp() {
+       HdfsServerConstants.RESERVED_LEGACY_GENERATION_STAMPS);
+ 
+     legacyGenerationStampLimit = generationStamp.getCurrentValue();
++    GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
++    GlobalState.triggerEvent();
+     return generationStamp.getCurrentValue();
+   }
+ 
+@@ -94,6 +97,8 @@ public void setLegacyGenerationStampLimit(long stamp) {
+     Preconditions.checkState(legacyGenerationStampLimit ==
+         HdfsConstants.GRANDFATHER_GENERATION_STAMP);
+     legacyGenerationStampLimit = stamp;
++    GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
++    GlobalState.triggerEvent();
+   }
+ 
+   /**
+@@ -115,6 +120,8 @@ SequentialBlockIdGenerator getBlockIdGenerator() {
+    */
+   public void setLastAllocatedContiguousBlockId(long blockId) {
+     blockIdGenerator.skipTo(blockId);
++    GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
++    GlobalState.triggerEvent();
+   }
+ 
+   /**
+@@ -131,6 +138,8 @@ public long getLastAllocatedContiguousBlockId() {
+    */
+   public void setLastAllocatedStripedBlockId(long blockId) {
+     blockGroupIdGenerator.skipTo(blockId);
++    GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
++    GlobalState.triggerEvent();
+   }
+ 
+   /**
+@@ -146,6 +155,8 @@ public long getLastAllocatedStripedBlockId() {
+    */
+   public void setLegacyGenerationStamp(long stamp) {
+     legacyGenerationStamp.setCurrentValue(stamp);
++    GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
++    GlobalState.triggerEvent();
+   }
+ 
+   /**
+@@ -160,6 +171,8 @@ public long getLegacyGenerationStamp() {
+    */
+   public void setGenerationStamp(long stamp) {
+     generationStamp.setCurrentValue(stamp);
++    GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
++    GlobalState.triggerEvent();
+   }
+ 
+   public long getGenerationStamp() {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+index 8ae1f506f49..06cd33222ec 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+@@ -156,6 +156,7 @@
+  */
+ @InterfaceAudience.Private
+ public class BlockManager implements BlockStatsMXBean {
++  public static BlockManager blockManagerInstance = null;
+ 
+   public static final Logger LOG = LoggerFactory.getLogger(BlockManager.class);
+   public static final Logger blockLog = NameNode.blockStateChangeLog;
+@@ -562,6 +563,8 @@ public BlockManager(final Namesystem namesystem, boolean haEnabled,
+ 
+     bmSafeMode = new BlockManagerSafeMode(this, namesystem, haEnabled, conf);
+ 
++    blockManagerInstance = this;
++
+     LOG.info("defaultReplication         = {}", defaultReplication);
+     LOG.info("maxReplication             = {}", maxReplication);
+     LOG.info("minReplication             = {}", minReplication);
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BPServiceActor.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BPServiceActor.java
+index 6c167f4f757..870a6b3b8c8 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BPServiceActor.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BPServiceActor.java
+@@ -19,6 +19,7 @@
+ 
+ import static org.apache.hadoop.util.Time.monotonicNow;
+ 
++import daikon.GlobalState;
+ import java.io.Closeable;
+ import java.io.EOFException;
+ import java.io.IOException;
+@@ -436,6 +437,8 @@ List<DatanodeCommand> blockReport(long fullBrLeaseId) throws IOException {
+     }
+     scheduler.updateLastBlockReportTime(monotonicNow());
+     scheduler.scheduleNextBlockReport();
++    GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
++    GlobalState.triggerEvent();
+     return cmds.size() == 0 ? null : cmds;
+   }
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+index 139b3d05111..9d8a7eb3969 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+@@ -17,7 +17,7 @@
+  */
+ package org.apache.hadoop.hdfs.server.datanode;
+ 
+-
++import daikon.GlobalState;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_ADDRESS_DEFAULT;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_ADDRESS_KEY;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_DATA_DIR_KEY;
+@@ -263,6 +263,7 @@
+ public class DataNode extends ReconfigurableBase
+     implements InterDatanodeProtocol, ClientDatanodeProtocol,
+         TraceAdminProtocol, DataNodeMXBean, ReconfigurationProtocol {
++  public static DataNode instance = null;
+   public static final Logger LOG = LoggerFactory.getLogger(DataNode.class);
+   
+   static{
+@@ -435,6 +436,7 @@ private static Tracer createTracer(Configuration conf) {
+     initOOBTimeout();
+     storageLocationChecker = null;
+     volumeChecker = new DatasetVolumeChecker(conf, new Timer());
++    instance = this;
+   }
+ 
+   /**
+@@ -520,6 +522,7 @@ public Map<String, Long> load(String key) throws Exception {
+ 
+     initOOBTimeout();
+     this.storageLocationChecker = storageLocationChecker;
++    instance = this;
+   }
+ 
+   @Override  // ReconfigurableBase
+@@ -736,6 +739,8 @@ ChangedVolumes parseChangedVolumes(String newVolumes) throws IOException {
+       }
+     }
+ 
++    GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
++    GlobalState.triggerEvent();
+     return results;
+   }
+ 
+@@ -1261,6 +1266,8 @@ public void reportBadBlocks(ExtendedBlock block) throws IOException{
+    */
+   public void reportBadBlocks(ExtendedBlock block, FsVolumeSpi volume)
+       throws IOException {
++    GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
++    GlobalState.triggerEvent();
+     BPOfferService bpos = getBPOSForBlock(block);
+     bpos.reportBadBlocks(
+         block, volume.getStorageID(), volume.getStorageType());
+@@ -1796,6 +1803,8 @@ public DatanodeRegistration getDNRegistrationForBP(String bpid)
+     if(bpos==null || bpos.bpRegistration==null) {
+       throw new IOException("cannot find BPOfferService for bpid="+bpid);
+     }
++    GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
++    GlobalState.triggerEvent();
+     return bpos.bpRegistration;
+   }
+   
+@@ -2273,6 +2282,8 @@ private void reportBadBlock(final BPOfferService bpos,
+   void transferBlock(ExtendedBlock block, DatanodeInfo[] xferTargets,
+       StorageType[] xferTargetStorageTypes, String[] xferTargetStorageIDs)
+       throws IOException {
++    GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
++    GlobalState.triggerEvent();
+     BPOfferService bpos = getBPOSForBlock(block);
+     DatanodeRegistration bpReg = getDNRegistrationForBP(block.getBlockPoolId());
+ 
+@@ -3315,6 +3326,8 @@ public DatanodeID getDatanodeId() {
+   @VisibleForTesting
+   public void clearAllBlockSecretKeys() {
+     blockPoolTokenSecretManager.clearAllKeysForTesting();
++    GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
++    GlobalState.triggerEvent();
+   }
+ 
+   @Override // ClientDatanodeProtocol
+@@ -3366,6 +3379,8 @@ public void checkDiskError() throws IOException {
+     } else {
+       LOG.debug("checkDiskError encountered no failures");
+     }
++    GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
++    GlobalState.triggerEvent();
+   }
+ 
+   private void handleVolumeFailures(Set<FsVolumeSpi> unhealthyVolumes) {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
+index 8259e673dc3..1865232fee9 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
+@@ -17,6 +17,7 @@
+  */
+ package org.apache.hadoop.hdfs.server.datanode.fsdataset.impl;
+ 
++import daikon.GlobalState;
+ import java.io.BufferedOutputStream;
+ import java.io.DataOutputStream;
+ import java.io.EOFException;
+@@ -1062,6 +1063,8 @@ void finalizeNewReplica(ReplicaInfo newReplicaInfo,
+       newReplicaInfo.deleteMetadata();
+       throw ioe;
+     }
++    GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
++    GlobalState.triggerEvent();
+   }
+ 
+   /**
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+index adfd7c36a78..b4363f110e2 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+@@ -17,6 +17,7 @@
+  */
+ package org.apache.hadoop.hdfs.server.namenode;
+ 
++import daikon.GlobalState;
+ import static org.apache.commons.lang.StringEscapeUtils.escapeJava;
+ import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.FS_TRASH_INTERVAL_DEFAULT;
+ import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.FS_TRASH_INTERVAL_KEY;
+@@ -397,6 +398,8 @@ private void logAuditEvent(boolean succeeded, String cmd, String src,
+   private void logAuditEvent(boolean succeeded,
+       UserGroupInformation ugi, InetAddress addr, String cmd, String src,
+       String dst, FileStatus status) {
++    GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
++    GlobalState.triggerEvent();
+     final String ugiStr = ugi.toString();
+     for (AuditLogger logger : auditLoggers) {
+       if (logger instanceof HdfsAuditLogger) {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNode.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNode.java
+index fd856a39b8b..c07f2d6e156 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNode.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNode.java
+@@ -210,6 +210,8 @@ public class NameNode extends ReconfigurableBase implements
+     HdfsConfiguration.init();
+   }
+ 
++  public static NameNode instance = null;
++
+   private InMemoryLevelDBAliasMapServer levelDBAliasMapServer;
+ 
+   /**
+@@ -950,6 +952,7 @@ protected NameNode(Configuration conf, NamenodeRole role)
+       throw e;
+     }
+     this.started.set(true);
++    instance = this;
+   }
+ 
+   private void stopAtException(Exception e){

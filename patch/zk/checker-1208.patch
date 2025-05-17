@@ -1,0 +1,113 @@
+diff --git a/bin/zkEnv.sh b/bin/zkEnv.sh
+index 43cbc2235..939327f88 100755
+--- a/bin/zkEnv.sh
++++ b/bin/zkEnv.sh
+@@ -93,6 +93,8 @@ do
+     CLASSPATH="$i:$CLASSPATH"
+ done
+ 
++CLASSPATH="$ZOOBINDIR/../../Semantic-Daikon-Checker/target/*:$CLASSPATH"
++
+ #make it work for developers
+ for d in "$ZOOBINDIR"/../build/lib/*.jar
+ do
+diff --git a/bin/zkServer.sh b/bin/zkServer.sh
+index 51dbe9f58..b62464d89 100755
+--- a/bin/zkServer.sh
++++ b/bin/zkServer.sh
+@@ -138,7 +138,7 @@ start)
+       fi
+     fi
+     nohup "$JAVA" "-Dzookeeper.log.dir=${ZOO_LOG_DIR}" "-Dzookeeper.root.logger=${ZOO_LOG4J_PROP}" \
+-    -cp "$CLASSPATH" $JVMFLAGS $ZOOMAIN "$ZOOCFG" > "$_ZOO_DAEMON_OUT" 2>&1 < /dev/null &
++    -cp "$CLASSPATH" $JVMFLAGS -Ddaikon.checkratio=1 $ZOOMAIN "$ZOOCFG" > "$_ZOO_DAEMON_OUT" 2>&1 < /dev/null &
+     if [ $? -eq 0 ]
+     then
+       case "$OSTYPE" in
+diff --git a/build.xml b/build.xml
+index 7384aa836..7c3b879ea 100644
+--- a/build.xml
++++ b/build.xml
+@@ -262,6 +262,9 @@ xmlns:cs="antlib:com.puppycrawl.tools.checkstyle">
+           <include name="${lib.dir.includes}" />
+           <exclude name="${lib.dir.excludes}" />
+       </fileset>
++      <fileset dir="${basedir}/../Semantic-Daikon-Checker/target">
++            <include name="*.jar" />
++      </fileset>
+       <fileset dir="${ant.home}/lib">
+           <include name="ant.jar" />
+       </fileset>
+diff --git a/src/java/main/org/apache/zookeeper/server/PrepRequestProcessor.java b/src/java/main/org/apache/zookeeper/server/PrepRequestProcessor.java
+index 825c22ada..3024c0e9f 100644
+--- a/src/java/main/org/apache/zookeeper/server/PrepRequestProcessor.java
++++ b/src/java/main/org/apache/zookeeper/server/PrepRequestProcessor.java
+@@ -69,6 +69,9 @@
+ import org.apache.zookeeper.txn.Txn;
+ import org.apache.zookeeper.txn.MultiTxn;
+ import org.apache.zookeeper.txn.TxnHeader;
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.InvariantChecker;
+ 
+ /**
+  * This request processor is generally at the start of a RequestProcessor
+@@ -532,6 +535,24 @@ protected void pRequest(Request request) throws RequestProcessorException {
+         // request.type + " id = 0x" + Long.toHexString(request.sessionId));
+         request.hdr = null;
+         request.txn = null;
++
++        switch (GlobalState.mode)
++        {
++            case TEST:
++                //CHANG: we expose states at the entry of all requests
++                try {
++                    DaikonLogger.getLogger().dumpStates();
++                } catch (Exception e) {
++                    // TODO: handle exception
++                }
++                break;
++            case PRODUCTION:
++                InvariantChecker.assertAll();
++                break;
++            case ASSERTING:
++                LOG.trace("Asserting, so skip another triggered");
++                break;
++        }
+         
+         try {
+             switch (request.type) {
+diff --git a/src/java/main/org/apache/zookeeper/server/ZooKeeperServer.java b/src/java/main/org/apache/zookeeper/server/ZooKeeperServer.java
+index 0a4b5557f..8a4863e51 100644
+--- a/src/java/main/org/apache/zookeeper/server/ZooKeeperServer.java
++++ b/src/java/main/org/apache/zookeeper/server/ZooKeeperServer.java
+@@ -67,6 +67,11 @@
+ import org.apache.zookeeper.txn.TxnHeader;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
++import daikon.DaikonLogger;
++import daikon.Pair;
++import daikon.GlobalState;
++import java.lang.reflect.Field;
++import java.util.*;
+ 
+ 
+ /**
+@@ -75,6 +80,8 @@
+  * PrepRequestProcessor -> SyncRequestProcessor -> FinalRequestProcessor
+  */
+ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
++    public static ZooKeeperServer zksInstance = null;
++
+     protected static final Logger LOG;
+     
+     static {
+@@ -417,6 +424,8 @@ public synchronized void startup() {
+         registerJMX();
+ 
+         setState(State.RUNNING);
++        zksInstance = this;
++        GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
+         notifyAll();
+     }
+ 

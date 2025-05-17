@@ -1,0 +1,365 @@
+diff --git a/hbase-rsgroup/src/test/java/org/apache/hadoop/hbase/rsgroup/TestRSGroupConfig.java b/hbase-rsgroup/src/test/java/org/apache/hadoop/hbase/rsgroup/TestRSGroupConfig.java
+index e427d780c4..a562c316b5 100644
+--- a/hbase-rsgroup/src/test/java/org/apache/hadoop/hbase/rsgroup/TestRSGroupConfig.java
++++ b/hbase-rsgroup/src/test/java/org/apache/hadoop/hbase/rsgroup/TestRSGroupConfig.java
+@@ -19,7 +19,6 @@ package org.apache.hadoop.hbase.rsgroup;
+ 
+ import static org.junit.Assert.assertEquals;
+ import static org.junit.Assert.assertNotNull;
+-import static org.junit.Assert.assertThrows;
+ 
+ import java.io.IOException;
+ import java.util.HashMap;
+@@ -60,11 +59,6 @@ public class TestRSGroupConfig extends TestRSGroupsBase {
+     TestRSGroupsBase.tearDownAfterClass();
+   }
+ 
+-  @Test
+-  public void testSetDefaultGroupConfiguration() {
+-    assertThrows(ConstraintException.class, () -> testSetConfiguration(RSGroupInfo.DEFAULT_GROUP));
+-  }
+-
+   @Test
+   public void testSetNonDefaultGroupConfiguration() throws IOException {
+     String group = getGroupName(name.getMethodName());
+@@ -88,4 +82,4 @@ public class TestRSGroupConfig extends TestRSGroupsBase {
+     assertEquals(0, configFromGroup.size());
+   }
+ 
+-}
+\ No newline at end of file
++}
+diff --git a/hbase-server/pom.xml b/hbase-server/pom.xml
+index d4f8d9aa06..c0c04b9f0b 100644
+--- a/hbase-server/pom.xml
++++ b/hbase-server/pom.xml
+@@ -221,9 +221,19 @@
+       <plugin>
+         <artifactId>maven-surefire-plugin</artifactId>
+         <configuration>
+-          <systemPropertyVariables>
+-            <test.build.webapps>target/test-classes/webapps</test.build.webapps>
+-          </systemPropertyVariables>
++          <argLine>-Xmx32G</argLine>
++          <parallel>suites</parallel>
++          <useUnlimitedThreads>true</useUnlimitedThreads>
++            <systemPropertyVariables>
++              <daikon.app.target>hbase</daikon.app.target>
++              <test.build.webapps>target/test-classes/webapps</test.build.webapps>
++            </systemPropertyVariables>
++          <properties>
++            <property>
++              <name>listener</name>
++              <value>t2c.TestListener</value>
++            </property>
++          </properties>
+         </configuration>
+       </plugin>
+       <plugin>
+@@ -502,6 +512,19 @@
+       <artifactId>mockito-core</artifactId>
+       <scope>test</scope>
+     </dependency>
++    <dependency>
++      <groupId>commons-beanutils</groupId>
++      <artifactId>commons-beanutils</artifactId>
++      <version>1.9.3</version>
++      <scope>compile</scope>
++    </dependency>
++    <dependency>
++      <groupId>daikon</groupId>
++      <artifactId>Semantic-Daikon-Checker</artifactId>
++      <version>1.0</version>
++      <scope>system</scope>
++      <systemPath>/users/dimas/Semantic-Daikon-Checker/target/Semantic-Daikon-checker-1.0-SNAPSHOT-jar-with-dependencies.jar</systemPath>
++    </dependency>
+     <dependency>
+       <groupId>org.slf4j</groupId>
+       <artifactId>jcl-over-slf4j</artifactId>
+@@ -708,6 +731,7 @@
+                 <phase>generate-test-resources</phase>
+                 <goals>
+                   <goal>build-classpath</goal>
++                  <goal>copy-dependencies</goal>
+                 </goals>
+                 <configuration>
+                   <!-- needed to run the unit test for DS to generate
+@@ -814,6 +838,7 @@
+                 <phase>generate-test-resources</phase>
+                 <goals>
+                   <goal>build-classpath</goal>
++                  <goal>copy-dependencies</goal>
+                 </goals>
+                 <configuration>
+                   <!-- needed to run the unit test for DS to generate
+diff --git a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/HMaster.java b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/HMaster.java
+index 39cb5bc545..dbc59e8348 100644
+--- a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/HMaster.java
++++ b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/HMaster.java
+@@ -225,6 +225,10 @@ import org.apache.hadoop.hbase.shaded.protobuf.RequestConverter;
+ import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetRegionInfoResponse;
+ import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotDescription;
+ 
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.InvariantChecker;
++
+ /**
+  * HMaster is the "master server" for HBase. An HBase cluster has one active master. If many masters
+  * are started, all compete. Whichever wins goes on to run the cluster. All others park themselves
+@@ -242,6 +246,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.Snapshot
+ @SuppressWarnings("deprecation")
+ public class HMaster extends HRegionServer implements MasterServices {
+ 
++  public static HMaster HMasterInstance = null;
+   private static final Logger LOG = LoggerFactory.getLogger(HMaster.class);
+ 
+   // MASTER is name of the webapp and the attribute name used stuffing this
+@@ -473,6 +478,7 @@ public class HMaster extends HRegionServer implements MasterServices {
+       this.activeMasterManager = createActiveMasterManager(zooKeeper, serverName, this);
+ 
+       cachedClusterId = new CachedClusterId(this, conf);
++      HMasterInstance = this;
+     } catch (Throwable t) {
+       // Make sure we log the exception. HMaster is often started via reflection and the
+       // cause of failed startup is lost.
+@@ -517,6 +523,8 @@ public class HMaster extends HRegionServer implements MasterServices {
+       // Fall in here even if we have been aborted. Need to run the shutdown services and
+       // the super run call will do this for us.
+       super.run();
++      GlobalState.mode = GlobalState.T2CMode.TEST;
++      GlobalState.triggerEvent();
+     } finally {
+       if (this.clusterSchemaService != null) {
+         // If on way out, then we are no longer active master.
+diff --git a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/assignment/RegionStates.java b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/assignment/RegionStates.java
+index d3553f11a3..8821ecf2b0 100644
+--- a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/assignment/RegionStates.java
++++ b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/assignment/RegionStates.java
+@@ -52,6 +52,7 @@ import org.slf4j.LoggerFactory;
+  */
+ @InterfaceAudience.Private
+ public class RegionStates {
++  public static RegionStates regionStatesInstance = null;
+   private static final Logger LOG = LoggerFactory.getLogger(RegionStates.class);
+ 
+   // This comparator sorts the RegionStates by time stamp then Region name.
+@@ -91,7 +92,9 @@ public class RegionStates {
+   private final ConcurrentHashMap<ServerName, ServerStateNode> serverMap =
+       new ConcurrentHashMap<ServerName, ServerStateNode>();
+ 
+-  public RegionStates() { }
++  public RegionStates() {
++    regionStatesInstance = this;
++  }
+ 
+   /**
+    * Called on stop of AssignmentManager.
+diff --git a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/MergeNormalizationPlan.java b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/MergeNormalizationPlan.java
+index f5a72863fe..6722588139 100644
+--- a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/MergeNormalizationPlan.java
++++ b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/MergeNormalizationPlan.java
+@@ -29,6 +29,9 @@ import org.apache.hadoop.hbase.client.RegionInfo;
+ import org.apache.hadoop.hbase.master.MasterServices;
+ import org.apache.yetus.audience.InterfaceAudience;
+ import org.apache.hbase.thirdparty.com.google.common.base.Preconditions;
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.InvariantChecker;
+ 
+ /**
+  * Normalization plan to merge adjacent regions. As with any call to
+@@ -47,6 +50,8 @@ final class MergeNormalizationPlan implements NormalizationPlan {
+     Preconditions.checkState(normalizationTargets.size() >= 2,
+       "normalizationTargets.size() must be >= 2 but was %s", normalizationTargets.size());
+     this.normalizationTargets = Collections.unmodifiableList(normalizationTargets);
++    GlobalState.mode = GlobalState.T2CMode.TEST;
++    GlobalState.triggerEvent();
+   }
+ 
+   @Override
+diff --git a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/SimpleRegionNormalizer.java b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/SimpleRegionNormalizer.java
+index 6d7387b7f1..d826b66ce0 100644
+--- a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/SimpleRegionNormalizer.java
++++ b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/SimpleRegionNormalizer.java
+@@ -44,6 +44,9 @@ import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
+ import org.apache.yetus.audience.InterfaceAudience;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.InvariantChecker;
+ 
+ /**
+  * Simple implementation of region normalizer. Logic in use:
+@@ -79,6 +82,8 @@ class SimpleRegionNormalizer implements RegionNormalizer, ConfigurationObserver
+   public SimpleRegionNormalizer() {
+     masterServices = null;
+     normalizerConfiguration = new NormalizerConfiguration();
++    GlobalState.mode = GlobalState.T2CMode.TEST;
++    GlobalState.triggerEvent();
+   }
+ 
+   @Override
+diff --git a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/procedure/ModifyTableProcedure.java b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/procedure/ModifyTableProcedure.java
+index 9892dba6b1..e3a0f34018 100644
+--- a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/procedure/ModifyTableProcedure.java
++++ b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/procedure/ModifyTableProcedure.java
+@@ -48,9 +48,14 @@ import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
+ import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos;
+ import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.ModifyTableState;
+ 
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.InvariantChecker;
++
+ @InterfaceAudience.Private
+ public class ModifyTableProcedure
+     extends AbstractStateMachineTableProcedure<ModifyTableState> {
++  public static ModifyTableProcedure modifyTableProcedureInstance = null;
+   private static final Logger LOG = LoggerFactory.getLogger(ModifyTableProcedure.class);
+ 
+   private TableDescriptor unmodifiedTableDescriptor = null;
+@@ -91,6 +96,7 @@ public class ModifyTableProcedure
+     initialize(oldTableDescriptor, shouldCheckDescriptor);
+     this.modifiedTableDescriptor = newTableDescriptor;
+     preflightChecks(env, null/*No table checks; if changing peers, table can be online*/);
++    modifyTableProcedureInstance = this;
+   }
+ 
+   @Override
+@@ -164,7 +170,11 @@ public class ModifyTableProcedure
+           }
+           if (deleteColumnFamilyInModify) {
+             setNextState(ModifyTableState.MODIFY_TABLE_DELETE_FS_LAYOUT);
++            GlobalState.mode = GlobalState.T2CMode.TEST;
++            GlobalState.triggerEvent();
+           } else {
++            GlobalState.mode = GlobalState.T2CMode.TEST;
++            GlobalState.triggerEvent();
+             return Flow.NO_MORE_STATE;
+           }
+           break;
+diff --git a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/procedure/ReopenTableRegionsProcedure.java b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/procedure/ReopenTableRegionsProcedure.java
+index aa89094501..9f5b194887 100644
+--- a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/procedure/ReopenTableRegionsProcedure.java
++++ b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/procedure/ReopenTableRegionsProcedure.java
+@@ -44,6 +44,8 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.R
+ import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.ReopenTableRegionsStateData;
+ import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos;
+ 
++import daikon.GlobalState;
++
+ /**
+  * Used for reopening the regions for a table.
+  */
+@@ -51,6 +53,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos;
+ public class ReopenTableRegionsProcedure
+     extends AbstractStateMachineTableProcedure<ReopenTableRegionsState> {
+ 
++  public static ReopenTableRegionsProcedure reopenTableRegionsProcedureInstance = null;
+   private static final Logger LOG = LoggerFactory.getLogger(ReopenTableRegionsProcedure.class);
+ 
+   private TableName tableName;
+@@ -65,17 +68,20 @@ public class ReopenTableRegionsProcedure
+ 
+   public ReopenTableRegionsProcedure() {
+     regionNames = Collections.emptyList();
++    reopenTableRegionsProcedureInstance = this;
+   }
+ 
+   public ReopenTableRegionsProcedure(TableName tableName) {
+     this.tableName = tableName;
+     this.regionNames = Collections.emptyList();
++    reopenTableRegionsProcedureInstance = this;
+   }
+ 
+   public ReopenTableRegionsProcedure(final TableName tableName,
+       final List<byte[]> regionNames) {
+     this.tableName = tableName;
+     this.regionNames = regionNames;
++    reopenTableRegionsProcedureInstance = this;
+   }
+ 
+   @Override
+@@ -113,6 +119,8 @@ public class ReopenTableRegionsProcedure
+           .getRegionStates().getRegionsOfTableForReopen(tableName);
+         regions = getRegionLocationsForReopen(tableRegions);
+         setNextState(ReopenTableRegionsState.REOPEN_TABLE_REGIONS_REOPEN_REGIONS);
++        GlobalState.mode = GlobalState.T2CMode.TEST;
++        GlobalState.triggerEvent();
+         return Flow.HAS_MORE_STATE;
+       case REOPEN_TABLE_REGIONS_REOPEN_REGIONS:
+         for (HRegionLocation loc : regions) {
+@@ -136,16 +144,22 @@ public class ReopenTableRegionsProcedure
+           addChildProcedure(proc);
+         }
+         setNextState(ReopenTableRegionsState.REOPEN_TABLE_REGIONS_CONFIRM_REOPENED);
++        GlobalState.mode = GlobalState.T2CMode.TEST;
++        GlobalState.triggerEvent();
+         return Flow.HAS_MORE_STATE;
+       case REOPEN_TABLE_REGIONS_CONFIRM_REOPENED:
+         regions = regions.stream().map(env.getAssignmentManager().getRegionStates()::checkReopened)
+           .filter(l -> l != null).collect(Collectors.toList());
+         if (regions.isEmpty()) {
++          GlobalState.mode = GlobalState.T2CMode.TEST;
++          GlobalState.triggerEvent();
+           return Flow.NO_MORE_STATE;
+         }
+         if (regions.stream().anyMatch(loc -> canSchedule(env, loc))) {
+           retryCounter = null;
+           setNextState(ReopenTableRegionsState.REOPEN_TABLE_REGIONS_REOPEN_REGIONS);
++          GlobalState.mode = GlobalState.T2CMode.TEST;
++          GlobalState.triggerEvent();
+           return Flow.HAS_MORE_STATE;
+         }
+         // We can not schedule TRSP for all the regions need to reopen, wait for a while and retry
+@@ -161,6 +175,8 @@ public class ReopenTableRegionsProcedure
+         setTimeout(Math.toIntExact(backoff));
+         setState(ProcedureProtos.ProcedureState.WAITING_TIMEOUT);
+         skipPersistence();
++        GlobalState.mode = GlobalState.T2CMode.TEST;
++        GlobalState.triggerEvent();
+         throw new ProcedureSuspendedException();
+       default:
+         throw new UnsupportedOperationException("unhandled state=" + state);
+diff --git a/hbase-server/src/main/java/org/apache/hadoop/hbase/regionserver/HRegionServer.java b/hbase-server/src/main/java/org/apache/hadoop/hbase/regionserver/HRegionServer.java
+index a443e7329e..db43e97bda 100644
+--- a/hbase-server/src/main/java/org/apache/hadoop/hbase/regionserver/HRegionServer.java
++++ b/hbase-server/src/main/java/org/apache/hadoop/hbase/regionserver/HRegionServer.java
+@@ -233,6 +233,10 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProto
+ import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProtos.ReportRegionStateTransitionRequest;
+ import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProtos.ReportRegionStateTransitionResponse;
+ 
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.InvariantChecker;
++
+ /**
+  * HRegionServer makes a set of HRegions available to clients. It checks in with
+  * the HMaster. There are many HRegionServers in a single HBase deployment.
+@@ -241,6 +245,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProto
+ @SuppressWarnings({ "deprecation"})
+ public class HRegionServer extends Thread implements
+     RegionServerServices, LastSequenceId, ConfigurationObserver {
++  public static HRegionServer HRegionServerInstance = null;
+   private static final Logger LOG = LoggerFactory.getLogger(HRegionServer.class);
+ 
+   /**
+@@ -685,6 +690,7 @@ public class HRegionServer extends Thread implements
+       this.choreService = new ChoreService(getName(), true);
+       this.executorService = new ExecutorService(getName());
+       putUpWebUI();
++      HRegionServerInstance = this;
+     } catch (Throwable t) {
+       // Make sure we log the exception. HRegionServer is often started via reflection and the
+       // cause of failed startup is lost.
+@@ -1088,6 +1094,8 @@ public class HRegionServer extends Thread implements
+           tryRegionServerReport(lastMsg, now);
+           lastMsg = System.currentTimeMillis();
+         }
++        GlobalState.mode = GlobalState.T2CMode.TEST;
++        GlobalState.triggerEvent();
+         if (!isStopped() && !isAborted()) {
+           this.sleeper.sleep();
+         }

@@ -1,0 +1,307 @@
+diff --git a/build.xml b/build.xml
+index 60a010109b..317b8c23ab 100644
+--- a/build.xml
++++ b/build.xml
+@@ -164,6 +164,9 @@
+             <exclude name="**/*-sources.jar"/>
+             <exclude name="**/ant-*.jar"/>
+         </fileset>
++        <fileset dir="/localtmp/daikon/Semantic-Daikon-Checker/target/">
++            <include name="Semantic-Daikon-checker-1.0-SNAPSHOT-jar-with-dependencies.jar" />
++        </fileset>
+     </path>
+ 
+   <macrodef name="create-javadoc">
+@@ -1217,6 +1220,23 @@
+     </copy>
+   </target>
+ 
++  <target name="t2c" depends="build-test">
++    <java className="t2c.TestEngine" fork="true">
++      <jvmarg value="-Ddaikon.app.target=cassandra"/>
++      <classpath>
++        <pathelement path="${java.class.path}"/>
++        <pathelement location="${stress.build.classes}"/>
++        <path refid="cassandra.classpath" />
++        <pathelement location="${test.classes}"/>
++        <pathelement location="${stress.test.classes}"/>
++        <pathelement location="${test.conf}"/>
++        <fileset dir="${test.lib}">
++          <include name="**/*.jar" />
++        </fileset>
++      </classpath>
++    </java>
++  </target>
++
+   <!-- Defines how to run a set of tests. If you change the defaults for attributes
+        you should also update them in testmacro.,
+        The two are split because the helper doesn't generate
+diff --git a/conf/cassandra-env.sh b/conf/cassandra-env.sh
+index 5a02f79555..bfadb9847b 100644
+--- a/conf/cassandra-env.sh
++++ b/conf/cassandra-env.sh
+@@ -14,6 +14,8 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
++CLASSPATH="$CLASSPATH:/localtmp/daikon/Semantic-Daikon-Checker/target/*"
++
+ calculate_heap_sizes()
+ {
+     case "`uname`" in
+diff --git a/src/java/org/apache/cassandra/config/CFMetaData.java b/src/java/org/apache/cassandra/config/CFMetaData.java
+index 77cad1af47..51bd82946d 100644
+--- a/src/java/org/apache/cassandra/config/CFMetaData.java
++++ b/src/java/org/apache/cassandra/config/CFMetaData.java
+@@ -66,6 +66,8 @@ import org.github.jamm.Unmetered;
+ @Unmetered
+ public final class CFMetaData
+ {
++    public static CFMetaData CFMetadataInstance = null;
++
+     public enum Flag
+     {
+         SUPER, COUNTER, DENSE, COMPOUND
+@@ -338,6 +340,8 @@ public final class CFMetaData
+ 
+         this.serializers = new Serializers(this);
+         this.resource = DataResource.table(ksName, cfName);
++
++        CFMetadataInstance = this;
+     }
+ 
+     // This rebuild informations that are intrinsically duplicate of the table definition but
+diff --git a/src/java/org/apache/cassandra/cql3/QueryProcessor.java b/src/java/org/apache/cassandra/cql3/QueryProcessor.java
+index 0e0ba3c635..b731886510 100644
+--- a/src/java/org/apache/cassandra/cql3/QueryProcessor.java
++++ b/src/java/org/apache/cassandra/cql3/QueryProcessor.java
+@@ -17,6 +17,8 @@
+  */
+ package org.apache.cassandra.cql3;
+ 
++import daikon.GlobalState;
++import java.lang.Thread;
+ import java.nio.ByteBuffer;
+ import java.util.*;
+ import java.util.concurrent.ConcurrentHashMap;
+@@ -116,6 +118,7 @@ public class QueryProcessor implements QueryHandler
+         logger.info("Initialized prepared statement caches with {} MB (native) and {} MB (Thrift)",
+                     DatabaseDescriptor.getPreparedStatementsCacheSizeMB(),
+                     DatabaseDescriptor.getThriftPreparedStatementsCacheSizeMB());
++        GlobalState.mode = GlobalState.T2CMode.TEST;
+     }
+ 
+     private static long capacityToBytes(long cacheSizeMB)
+@@ -311,10 +314,27 @@ public class QueryProcessor implements QueryHandler
+     {
+         ParsedStatement.Prepared prepared = prepareInternal(query);
+         ResultMessage result = prepared.statement.executeInternal(internalQueryState(), makeInternalOptions(prepared, values));
+-        if (result instanceof ResultMessage.Rows)
+-            return UntypedResultSet.create(((ResultMessage.Rows)result).result);
+-        else
++        if (result instanceof ResultMessage.Rows){
++            UntypedResultSet resultSet = UntypedResultSet.create(((ResultMessage.Rows)result).result);
++            System.out.println("DIMAS: QueryProcessor1 success");
++            try {
++                GlobalState.triggerEvent();
++                Thread.sleep(50);
++            } catch (Exception e) {
++                System.out.println("DIMAS: Sleep error");
++            }
++            return resultSet;
++        }
++        else{
++            System.out.println("DIMAS: QueryProcessor1 fail");
++            try {
++                GlobalState.triggerEvent();
++                Thread.sleep(50);
++            } catch (Exception e) {
++                System.out.println("DIMAS: Sleep error");
++            }
+             return null;
++        }
+     }
+ 
+     public static UntypedResultSet execute(String query, ConsistencyLevel cl, Object... values)
+@@ -330,10 +350,27 @@ public class QueryProcessor implements QueryHandler
+         {
+             ParsedStatement.Prepared prepared = prepareInternal(query);
+             ResultMessage result = prepared.statement.execute(state, makeInternalOptions(prepared, values, cl), System.nanoTime());
+-            if (result instanceof ResultMessage.Rows)
+-                return UntypedResultSet.create(((ResultMessage.Rows)result).result);
+-            else
++            if (result instanceof ResultMessage.Rows){
++                UntypedResultSet resultSet = UntypedResultSet.create(((ResultMessage.Rows)result).result);
++                System.out.println("DIMAS: QueryProcessor2 success");
++                try {
++                    GlobalState.triggerEvent();
++                    Thread.sleep(50);
++                } catch (Exception e) {
++                    System.out.println("DIMAS: Sleep error");
++                }
++                return resultSet;
++            }
++            else{
++                System.out.println("DIMAS: QueryProcessor2 fail");
++                try {
++                    GlobalState.triggerEvent();
++                    Thread.sleep(50);
++                } catch (Exception e) {
++                    System.out.println("DIMAS: Sleep error");
++                }
+                 return null;
++            }
+         }
+         catch (RequestValidationException e)
+         {
+@@ -349,7 +386,15 @@ public class QueryProcessor implements QueryHandler
+ 
+         SelectStatement select = (SelectStatement)prepared.statement;
+         QueryPager pager = select.getQuery(makeInternalOptions(prepared, values), FBUtilities.nowInSeconds()).getPager(null, ProtocolVersion.CURRENT);
+-        return UntypedResultSet.create(select, pager, pageSize);
++        UntypedResultSet resultSet = UntypedResultSet.create(select, pager, pageSize);
++        System.out.println("DIMAS: QueryProcessor3");
++        try {
++            GlobalState.triggerEvent();
++            Thread.sleep(50);
++        } catch (Exception e) {
++            System.out.println("DIMAS: Sleep error");
++        }
++        return resultSet;
+     }
+ 
+     /**
+@@ -361,10 +406,27 @@ public class QueryProcessor implements QueryHandler
+         ParsedStatement.Prepared prepared = parseStatement(query, internalQueryState());
+         prepared.statement.validate(internalQueryState().getClientState());
+         ResultMessage result = prepared.statement.executeInternal(internalQueryState(), makeInternalOptions(prepared, values));
+-        if (result instanceof ResultMessage.Rows)
+-            return UntypedResultSet.create(((ResultMessage.Rows)result).result);
+-        else
++        if (result instanceof ResultMessage.Rows){
++            UntypedResultSet resultSet = UntypedResultSet.create(((ResultMessage.Rows)result).result);
++            System.out.println("DIMAS: QueryProcessor4 success");
++            try {
++                GlobalState.triggerEvent();
++                Thread.sleep(50);
++            } catch (Exception e) {
++                System.out.println("DIMAS: Sleep error");
++            }
++            return resultSet;
++        }
++        else{
++            System.out.println("DIMAS: QueryProcessor4 fail");
++            try {
++                GlobalState.triggerEvent();
++                Thread.sleep(50);
++            } catch (Exception e) {
++                System.out.println("DIMAS: Sleep error");
++            }
+             return null;
++        }
+     }
+ 
+     /**
+@@ -379,7 +441,15 @@ public class QueryProcessor implements QueryHandler
+         SelectStatement select = (SelectStatement)prepared.statement;
+         ResultMessage result = select.executeInternal(internalQueryState(), makeInternalOptions(prepared, values), nowInSec, queryStartNanoTime);
+         assert result instanceof ResultMessage.Rows;
+-        return UntypedResultSet.create(((ResultMessage.Rows)result).result);
++        UntypedResultSet resultSet = UntypedResultSet.create(((ResultMessage.Rows)result).result);
++        System.out.println("DIMAS: QueryProcessor5");
++        try {
++            GlobalState.triggerEvent();
++            Thread.sleep(50);
++        } catch (Exception e) {
++            System.out.println("DIMAS: Sleep error");
++        }
++        return resultSet;
+     }
+ 
+     public static UntypedResultSet resultify(String query, RowIterator partition)
+diff --git a/src/java/org/apache/cassandra/cql3/ResultSet.java b/src/java/org/apache/cassandra/cql3/ResultSet.java
+index 9659509862..e96aec5b99 100644
+--- a/src/java/org/apache/cassandra/cql3/ResultSet.java
++++ b/src/java/org/apache/cassandra/cql3/ResultSet.java
+@@ -35,6 +35,8 @@ import org.apache.cassandra.service.pager.PagingState;
+ 
+ public class ResultSet
+ {
++    public static ResultSet resultSetInstance = null;
++
+     public static final Codec codec = new Codec();
+ 
+     public final ResultMetadata metadata;
+@@ -43,12 +45,14 @@ public class ResultSet
+     public ResultSet(List<ColumnSpecification> metadata)
+     {
+         this(new ResultMetadata(metadata), new ArrayList<List<ByteBuffer>>());
++        resultSetInstance = this;
+     }
+ 
+     public ResultSet(ResultMetadata metadata, List<List<ByteBuffer>> rows)
+     {
+         this.metadata = metadata;
+         this.rows = rows;
++        resultSetInstance = this;
+     }
+ 
+     public int size()
+diff --git a/src/java/org/apache/cassandra/cql3/UntypedResultSet.java b/src/java/org/apache/cassandra/cql3/UntypedResultSet.java
+index d896071ad7..1b1d520ec7 100644
+--- a/src/java/org/apache/cassandra/cql3/UntypedResultSet.java
++++ b/src/java/org/apache/cassandra/cql3/UntypedResultSet.java
+@@ -108,11 +108,14 @@ public abstract class UntypedResultSet implements Iterable<UntypedResultSet.Row>
+ 
+     private static class FromResultList extends UntypedResultSet
+     {
++        public static FromResultList fromResultListInstance = null;
++
+         private final List<Map<String, ByteBuffer>> cqlRows;
+ 
+         private FromResultList(List<Map<String, ByteBuffer>> cqlRows)
+         {
+             this.cqlRows = cqlRows;
++            fromResultListInstance = this;
+         }
+ 
+         public int size()
+@@ -150,6 +153,8 @@ public abstract class UntypedResultSet implements Iterable<UntypedResultSet.Row>
+ 
+     private static class FromPager extends UntypedResultSet
+     {
++        public static FromPager fromPagerInstance = null;
++
+         private final SelectStatement select;
+         private final QueryPager pager;
+         private final int pageSize;
+@@ -161,6 +166,7 @@ public abstract class UntypedResultSet implements Iterable<UntypedResultSet.Row>
+             this.pager = pager;
+             this.pageSize = pageSize;
+             this.metadata = select.getResultMetadata().requestNames();
++            fromPagerInstance = this;
+         }
+ 
+         public int size()
+diff --git a/src/java/org/apache/cassandra/db/ColumnFamilyStore.java b/src/java/org/apache/cassandra/db/ColumnFamilyStore.java
+index 1b01c3f167..b4c570afc6 100644
+--- a/src/java/org/apache/cassandra/db/ColumnFamilyStore.java
++++ b/src/java/org/apache/cassandra/db/ColumnFamilyStore.java
+@@ -88,6 +88,8 @@ import static org.apache.cassandra.utils.Throwables.maybeFail;
+ 
+ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
+ {
++    public static ColumnFamilyStore cfsInstance = null;
++
+     // The directories which will be searched for sstables on cfs instantiation.
+     private static volatile Directories.DataDirectory[] initialDirectories = Directories.dataDirectories;
+ 
+@@ -497,6 +499,8 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
+             mbeanName = null;
+             oldMBeanName= null;
+         }
++
++        cfsInstance = this;
+     }
+ 
+     public Directories getDirectories()

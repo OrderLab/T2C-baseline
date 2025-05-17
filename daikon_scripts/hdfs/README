@@ -1,0 +1,5 @@
+#how to use
+1. run_all_v2.py, this is to feed traces to daikon and analyze 
+2. gen_decl.py, this is an inserted step, because in cassandra we would have several dtraces files that cannot be merged, this is to generate a global pool of declaration
+3. merge_javacodes.py, an inserted step too, this is to merge all generated daikon java files
+4. gen_pool.py, convert daikon generated java files to executable files for us to use

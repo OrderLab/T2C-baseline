@@ -1,0 +1,342 @@
+diff --git a/hbase-server/pom.xml b/hbase-server/pom.xml
+index f1c28473c2..415d7fd1f4 100644
+--- a/hbase-server/pom.xml
++++ b/hbase-server/pom.xml
+@@ -35,6 +35,7 @@
+     <license.bundles.bootstrap>true</license.bundles.bootstrap>
+     <license.bundles.jquery>true</license.bundles.jquery>
+   </properties>
++
+   <build>
+     <!-- Make sure resources get added before they are processed
+       by placing this first
+@@ -221,9 +222,19 @@
+       <plugin>
+         <artifactId>maven-surefire-plugin</artifactId>
+         <configuration>
++          <argLine>-Xmx32G</argLine>
++          <parallel>suites</parallel>
++          <useUnlimitedThreads>true</useUnlimitedThreads>
+           <systemPropertyVariables>
++            <daikon.app.target>hbase</daikon.app.target>
+             <test.build.webapps>target/test-classes/webapps</test.build.webapps>
+           </systemPropertyVariables>
++          <properties>
++            <property>
++              <name>listener</name>
++              <value>t2c.TestListener</value>
++            </property>
++          </properties>
+         </configuration>
+       </plugin>
+       <plugin>
+@@ -519,6 +530,19 @@
+       <artifactId>log4j</artifactId>
+       <scope>test</scope>
+     </dependency>
++    <dependency>
++        <groupId>commons-beanutils</groupId>
++        <artifactId>commons-beanutils</artifactId>
++        <version>1.9.3</version>
++        <scope>compile</scope>
++    </dependency>
++    <dependency>
++      <groupId>daikon</groupId>
++      <artifactId>Semantic-Daikon-Checker</artifactId>
++      <version>1.0</version>
++      <scope>system</scope>
++      <systemPath>/users/dimas/Semantic-Daikon-Checker/target/Semantic-Daikon-checker-1.0-SNAPSHOT-jar-with-dependencies.jar</systemPath>
++    </dependency>
+   </dependencies>
+   <profiles>
+     <!-- Needs to make the profile in apache parent pom -->
+@@ -691,6 +715,7 @@
+                 <phase>generate-test-resources</phase>
+                 <goals>
+                   <goal>build-classpath</goal>
++                  <goal>copy-dependencies</goal>
+                 </goals>
+                 <configuration>
+                   <!-- needed to run the unit test for DS to generate
+diff --git a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/HMaster.java b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/HMaster.java
+index 6b893f0235..7fc8b9b0bc 100644
+--- a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/HMaster.java
++++ b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/HMaster.java
+@@ -22,6 +22,9 @@ import static org.apache.hadoop.hbase.HConstants.HBASE_MASTER_LOGCLEANER_PLUGINS
+ import static org.apache.hadoop.hbase.HConstants.HBASE_SPLIT_WAL_COORDINATED_BY_ZK;
+ import static org.apache.hadoop.hbase.util.DNS.MASTER_HOSTNAME_KEY;
+ 
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.InvariantChecker;
+ import java.io.IOException;
+ import java.io.InterruptedIOException;
+ import java.lang.reflect.Constructor;
+@@ -254,6 +257,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.Snapshot
+ @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.TOOLS)
+ @SuppressWarnings("deprecation")
+ public class HMaster extends HRegionServer implements MasterServices {
++  public static HMaster HMasterInstance = null;
+   private static Logger LOG = LoggerFactory.getLogger(HMaster.class);
+ 
+   /**
+@@ -588,6 +592,7 @@ public class HMaster extends HRegionServer implements MasterServices {
+         this.activeMasterManager = null;
+       }
+       cachedClusterId = new CachedClusterId(this, conf);
++      HMasterInstance = this;
+     } catch (Throwable t) {
+       // Make sure we log the exception. HMaster is often started via reflection and the
+       // cause of failed startup is lost.
+@@ -634,6 +639,8 @@ public class HMaster extends HRegionServer implements MasterServices {
+       // Fall in here even if we have been aborted. Need to run the shutdown services and
+       // the super run call will do this for us.
+       super.run();
++      GlobalState.mode = GlobalState.T2CMode.TEST;
++      GlobalState.triggerEvent();
+     } finally {
+       if (this.clusterSchemaService != null) {
+         // If on way out, then we are no longer active master.
+diff --git a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/assignment/RegionStates.java b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/assignment/RegionStates.java
+index 3bb3c4c0b3..045bf0a346 100644
+--- a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/assignment/RegionStates.java
++++ b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/assignment/RegionStates.java
+@@ -54,6 +54,7 @@ import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesti
+  */
+ @InterfaceAudience.Private
+ public class RegionStates {
++  public static RegionStates regionStatesInstance = null;
+   private static final Logger LOG = LoggerFactory.getLogger(RegionStates.class);
+ 
+   // This comparator sorts the RegionStates by time stamp then Region name.
+@@ -102,7 +103,9 @@ public class RegionStates {
+   private final ConcurrentHashMap<ServerName, ServerStateNode> serverMap =
+       new ConcurrentHashMap<ServerName, ServerStateNode>();
+ 
+-  public RegionStates() { }
++  public RegionStates() {
++    regionStatesInstance = this;
++  }
+ 
+   /**
+    * Called on stop of AssignmentManager.
+diff --git a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/MergeNormalizationPlan.java b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/MergeNormalizationPlan.java
+index 7c33661d7c..c8e5865197 100644
+--- a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/MergeNormalizationPlan.java
++++ b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/MergeNormalizationPlan.java
+@@ -18,6 +18,9 @@
+  */
+ package org.apache.hadoop.hbase.master.normalizer;
+ 
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.InvariantChecker;
+ import java.io.IOException;
+ 
+ import org.apache.hadoop.hbase.client.Admin;
+@@ -74,5 +77,7 @@ public class MergeNormalizationPlan implements NormalizationPlan {
+     } catch (IOException ex) {
+       LOG.error("Error during region merge: ", ex);
+     }
++    GlobalState.mode = GlobalState.T2CMode.TEST;
++    GlobalState.triggerEvent();
+   }
+ }
+diff --git a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/MergeNormalizer.java b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/MergeNormalizer.java
+index 444c27c286..f507ec0ebb 100644
+--- a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/MergeNormalizer.java
++++ b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/MergeNormalizer.java
+@@ -18,6 +18,9 @@
+  */
+ package org.apache.hadoop.hbase.master.normalizer;
+ 
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.InvariantChecker;
+ import java.sql.Timestamp;
+ import java.util.ArrayList;
+ import java.util.List;
+@@ -107,6 +110,8 @@ public class MergeNormalizer extends AbstractRegionNormalizer {
+       LOG.debug("No normalization needed, regions look good for table: {}", table);
+       return null;
+     }
++    GlobalState.mode = GlobalState.T2CMode.TEST;
++    GlobalState.triggerEvent();
+     return plans;
+   }
+ 
+diff --git a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/SimpleRegionNormalizer.java b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/SimpleRegionNormalizer.java
+index bd90f5b76c..30fac8a9b5 100644
+--- a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/SimpleRegionNormalizer.java
++++ b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/normalizer/SimpleRegionNormalizer.java
+@@ -18,6 +18,9 @@
+  */
+ package org.apache.hadoop.hbase.master.normalizer;
+ 
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.InvariantChecker;
+ import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.Comparator;
+@@ -141,6 +144,8 @@ public class SimpleRegionNormalizer extends AbstractRegionNormalizer {
+       return null;
+     }
+     Collections.sort(plans, planComparator);
++    GlobalState.mode = GlobalState.T2CMode.TEST;
++    GlobalState.triggerEvent();
+     return plans;
+   }
+ }
+diff --git a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/procedure/ModifyTableProcedure.java b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/procedure/ModifyTableProcedure.java
+index 49b04e4293..9f3c68b1b9 100644
+--- a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/procedure/ModifyTableProcedure.java
++++ b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/procedure/ModifyTableProcedure.java
+@@ -18,6 +18,9 @@
+ 
+ package org.apache.hadoop.hbase.master.procedure;
+ 
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.InvariantChecker;
+ import java.io.IOException;
+ import java.util.Arrays;
+ import java.util.Collections;
+@@ -57,6 +60,8 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.M
+ @InterfaceAudience.Private
+ public class ModifyTableProcedure
+     extends AbstractStateMachineTableProcedure<ModifyTableState> {
++
++  public static ModifyTableProcedure modifyTableProcedureInstance = null;
+   private static final Logger LOG = LoggerFactory.getLogger(ModifyTableProcedure.class);
+ 
+   private TableDescriptor unmodifiedTableDescriptor = null;
+@@ -81,12 +86,14 @@ public class ModifyTableProcedure
+   public ModifyTableProcedure(final MasterProcedureEnv env, final TableDescriptor htd)
+   throws HBaseIOException {
+     this(env, htd, null);
++    modifyTableProcedureInstance = this;
+   }
+ 
+   public ModifyTableProcedure(final MasterProcedureEnv env, final TableDescriptor htd,
+       final ProcedurePrepareLatch latch)
+   throws HBaseIOException {
+     this(env, htd, latch, null, false);
++    modifyTableProcedureInstance = this;
+   }
+ 
+   public ModifyTableProcedure(final MasterProcedureEnv env,
+@@ -113,6 +120,7 @@ public class ModifyTableProcedure
+         }
+       }
+     }
++    modifyTableProcedureInstance = this;
+   }
+ 
+   private void initialize(final TableDescriptor unmodifiedTableDescriptor,
+@@ -120,6 +128,7 @@ public class ModifyTableProcedure
+     this.unmodifiedTableDescriptor = unmodifiedTableDescriptor;
+     this.shouldCheckDescriptor = shouldCheckDescriptor;
+     this.deleteColumnFamilyInModify = false;
++    modifyTableProcedureInstance = this;
+   }
+ 
+   @Override
+@@ -152,9 +161,14 @@ public class ModifyTableProcedure
+           if (env.getAssignmentManager().isTableEnabled(getTableName())) {
+             addChildProcedure(new ReopenTableRegionsProcedure(getTableName()));
+           }
++          // GlobalState.mode = GlobalState.T2CMode.PRODUCTION;
+           if (deleteColumnFamilyInModify) {
+             setNextState(ModifyTableState.MODIFY_TABLE_DELETE_FS_LAYOUT);
++            GlobalState.mode = GlobalState.T2CMode.TEST;
++            GlobalState.triggerEvent();
+           } else {
++            GlobalState.mode = GlobalState.T2CMode.TEST;
++            GlobalState.triggerEvent();
+             return Flow.NO_MORE_STATE;
+           }
+           break;
+diff --git a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/procedure/ReopenTableRegionsProcedure.java b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/procedure/ReopenTableRegionsProcedure.java
+index 7bf834c62c..44c0922b90 100644
+--- a/hbase-server/src/main/java/org/apache/hadoop/hbase/master/procedure/ReopenTableRegionsProcedure.java
++++ b/hbase-server/src/main/java/org/apache/hadoop/hbase/master/procedure/ReopenTableRegionsProcedure.java
+@@ -16,6 +16,7 @@
+  * limitations under the License.
+  */
+ package org.apache.hadoop.hbase.master.procedure;
++import daikon.GlobalState;
+ 
+ import java.io.IOException;
+ import java.util.ArrayList;
+@@ -50,7 +51,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos;
+ @InterfaceAudience.Private
+ public class ReopenTableRegionsProcedure
+     extends AbstractStateMachineTableProcedure<ReopenTableRegionsState> {
+-
++  public static ReopenTableRegionsProcedure reopenTableRegionsProcedureInstance = null;
+   private static final Logger LOG = LoggerFactory.getLogger(ReopenTableRegionsProcedure.class);
+ 
+   private TableName tableName;
+@@ -65,17 +66,20 @@ public class ReopenTableRegionsProcedure
+ 
+   public ReopenTableRegionsProcedure() {
+     regionNames = null;
++    reopenTableRegionsProcedureInstance = this;
+   }
+ 
+   public ReopenTableRegionsProcedure(TableName tableName) {
+     this.tableName = tableName;
+     this.regionNames = null;
++    reopenTableRegionsProcedureInstance = this;
+   }
+ 
+   public ReopenTableRegionsProcedure(final TableName tableName,
+       final List<byte[]> regionNames) {
+     this.tableName = tableName;
+     this.regionNames = regionNames;
++    reopenTableRegionsProcedureInstance = this;
+   }
+ 
+   @Override
+@@ -113,6 +117,8 @@ public class ReopenTableRegionsProcedure
+           .getRegionStates().getRegionsOfTableForReopen(tableName);
+         regions = getRegionLocationsForReopen(tableRegions);
+         setNextState(ReopenTableRegionsState.REOPEN_TABLE_REGIONS_REOPEN_REGIONS);
++        GlobalState.mode = GlobalState.T2CMode.TEST;
++        GlobalState.triggerEvent();
+         return Flow.HAS_MORE_STATE;
+       case REOPEN_TABLE_REGIONS_REOPEN_REGIONS:
+         for (HRegionLocation loc : regions) {
+@@ -136,16 +142,22 @@ public class ReopenTableRegionsProcedure
+           addChildProcedure(proc);
+         }
+         setNextState(ReopenTableRegionsState.REOPEN_TABLE_REGIONS_CONFIRM_REOPENED);
++        GlobalState.mode = GlobalState.T2CMode.TEST;
++        GlobalState.triggerEvent();
+         return Flow.HAS_MORE_STATE;
+       case REOPEN_TABLE_REGIONS_CONFIRM_REOPENED:
+         regions = regions.stream().map(env.getAssignmentManager().getRegionStates()::checkReopened)
+           .filter(l -> l != null).collect(Collectors.toList());
+         if (regions.isEmpty()) {
++          GlobalState.mode = GlobalState.T2CMode.TEST;
++          GlobalState.triggerEvent();
+           return Flow.NO_MORE_STATE;
+         }
+         if (regions.stream().anyMatch(loc -> canSchedule(env, loc))) {
+           retryCounter = null;
+           setNextState(ReopenTableRegionsState.REOPEN_TABLE_REGIONS_REOPEN_REGIONS);
++          GlobalState.mode = GlobalState.T2CMode.TEST;
++          GlobalState.triggerEvent();
+           return Flow.HAS_MORE_STATE;
+         }
+         // We can not schedule TRSP for all the regions need to reopen, wait for a while and retry
+@@ -161,6 +173,8 @@ public class ReopenTableRegionsProcedure
+         setTimeout(Math.toIntExact(backoff));
+         setState(ProcedureProtos.ProcedureState.WAITING_TIMEOUT);
+         skipPersistence();
++        GlobalState.mode = GlobalState.T2CMode.TEST;
++        GlobalState.triggerEvent();
+         throw new ProcedureSuspendedException();
+       default:
+         throw new UnsupportedOperationException("unhandled state=" + state);

@@ -1,0 +1,113 @@
+diff --git a/bin/zkEnv.sh b/bin/zkEnv.sh
+index 8d93a50c7..f1d67b850 100755
+--- a/bin/zkEnv.sh
++++ b/bin/zkEnv.sh
+@@ -121,6 +121,8 @@ do
+    CLASSPATH="$d:$CLASSPATH"
+ done
+ 
++CLASSPATH="$ZOOBINDIR/../../Semantic-Daikon-Checker/target/*:$CLASSPATH"
++
+ #make it work for developers
+ CLASSPATH="$ZOOBINDIR/../build/classes:$CLASSPATH"
+ 
+diff --git a/bin/zkServer.sh b/bin/zkServer.sh
+index ec3db140f..8bbac3e84 100755
+--- a/bin/zkServer.sh
++++ b/bin/zkServer.sh
+@@ -158,7 +158,7 @@ start)
+     nohup "$JAVA" $ZOO_DATADIR_AUTOCREATE "-Dzookeeper.log.dir=${ZOO_LOG_DIR}" \
+     "-Dzookeeper.log.file=${ZOO_LOG_FILE}" "-Dzookeeper.root.logger=${ZOO_LOG4J_PROP}" \
+     -XX:+HeapDumpOnOutOfMemoryError -XX:OnOutOfMemoryError='kill -9 %p' \
+-    -cp "$CLASSPATH" $JVMFLAGS $ZOOMAIN "$ZOOCFG" > "$_ZOO_DAEMON_OUT" 2>&1 < /dev/null &
++    -cp "$CLASSPATH" $JVMFLAGS -Ddaikon.checkratio=0.01 $ZOOMAIN "$ZOOCFG" > "$_ZOO_DAEMON_OUT" 2>&1 < /dev/null &
+     if [ $? -eq 0 ]
+     then
+       case "$OSTYPE" in
+diff --git a/zookeeper-server/pom.xml b/zookeeper-server/pom.xml
+index 390d40e0a..b1fbad0d5 100755
+--- a/zookeeper-server/pom.xml
++++ b/zookeeper-server/pom.xml
+@@ -34,6 +34,13 @@
+   <description>ZooKeeper server</description>
+ 
+   <dependencies>
++    <dependency>
++      <groupId>daikon</groupId>
++      <artifactId>Semantic-Daikon-Checker</artifactId>
++      <version>1.0</version>
++      <scope>system</scope>
++      <systemPath>${project.basedir}/../../Semantic-Daikon-Checker/target/Semantic-Daikon-checker-1.0-SNAPSHOT-jar-with-dependencies.jar</systemPath>
++    </dependency>
+     <dependency>
+       <groupId>com.github.spotbugs</groupId>
+       <artifactId>spotbugs-annotations</artifactId>
+diff --git a/zookeeper-server/src/main/java/org/apache/zookeeper/server/SyncRequestProcessor.java b/zookeeper-server/src/main/java/org/apache/zookeeper/server/SyncRequestProcessor.java
+index 7c5e5ef66..85998226f 100644
+--- a/zookeeper-server/src/main/java/org/apache/zookeeper/server/SyncRequestProcessor.java
++++ b/zookeeper-server/src/main/java/org/apache/zookeeper/server/SyncRequestProcessor.java
+@@ -18,6 +18,9 @@
+ 
+ package org.apache.zookeeper.server;
+ 
++import daikon.DaikonLogger;
++import daikon.GlobalState;
++import daikon.InvariantChecker;
+ import java.io.Flushable;
+ import java.io.IOException;
+ import java.util.ArrayDeque;
+@@ -230,6 +233,20 @@ private void flush() throws IOException, RequestProcessorException {
+             return;
+         }
+ 
++        switch (GlobalState.mode)
++        {
++            case TEST:
++                //CHANG: we expose states at the entry of all requests
++                DaikonLogger.getLogger().dumpStates();
++                break;
++            case PRODUCTION:
++                InvariantChecker.assertAll();
++                break;
++            case ASSERTING:
++                LOG.trace("Asserting, so skip another triggered");
++                break;
++        }
++
+         ServerMetrics.getMetrics().BATCH_SIZE.add(toFlush.size());
+ 
+         long flushStartTime = Time.currentElapsedTime();
+diff --git a/zookeeper-server/src/main/java/org/apache/zookeeper/server/ZooKeeperServer.java b/zookeeper-server/src/main/java/org/apache/zookeeper/server/ZooKeeperServer.java
+index 2594b156b..39bf51031 100644
+--- a/zookeeper-server/src/main/java/org/apache/zookeeper/server/ZooKeeperServer.java
++++ b/zookeeper-server/src/main/java/org/apache/zookeeper/server/ZooKeeperServer.java
+@@ -18,6 +18,10 @@
+ 
+ package org.apache.zookeeper.server;
+ 
++import daikon.DaikonLogger;
++import daikon.Pair;
++import java.lang.reflect.Field;
++import java.util.*;
+ import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+ import java.io.ByteArrayOutputStream;
+ import java.io.File;
+@@ -92,6 +96,9 @@
+  */
+ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
+ 
++    //CHANG: for testing use
++    public static ZooKeeperServer zksInstance = null;
++
+     protected static final Logger LOG;
+ 
+     public static final String GLOBAL_OUTSTANDING_LIMIT = "zookeeper.globalOutstandingLimit";
+@@ -340,6 +347,8 @@ public ZooKeeperServer(FileTxnSnapLog txnLogFactory, int tickTime, int minSessio
+             getClientPortListenBacklog(),
+             txnLogFactory.getDataDir(),
+             txnLogFactory.getSnapDir());
++
++        zksInstance = this;
+     }
+ 
+     public String getInitialConfig() {

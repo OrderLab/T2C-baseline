@@ -1,0 +1,156 @@
+diff --git a/hadoop-common-project/hadoop-common/src/main/bin/hadoop-functions.sh b/hadoop-common-project/hadoop-common/src/main/bin/hadoop-functions.sh
+index eb7285fb4e6..df6c141543e 100755
+--- a/hadoop-common-project/hadoop-common/src/main/bin/hadoop-functions.sh
++++ b/hadoop-common-project/hadoop-common/src/main/bin/hadoop-functions.sh
+@@ -1808,6 +1808,7 @@ function hadoop_start_daemon
+     hadoop_error "ERROR:  Cannot write ${command} pid ${pidfile}."
+   fi
+ 
++  CLASSPATH="${HADOOP_HOME}/../../../../Semantic-Daikon-Checker/target/*:$CLASSPATH"
+   export CLASSPATH
+   #shellcheck disable=SC2086
+   exec "${JAVA}" "-Dproc_${command}" ${HADOOP_OPTS} "${class}" "$@"
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/pom.xml b/hadoop-hdfs-project/hadoop-hdfs/pom.xml
+index 5529590da12..7eff12dc211 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/pom.xml
++++ b/hadoop-hdfs-project/hadoop-hdfs/pom.xml
+@@ -35,6 +35,13 @@ https://maven.apache.org/xsd/maven-4.0.0.xsd">
+   </properties>
+ 
+   <dependencies>
++    <dependency>
++      <groupId>daikon</groupId>
++      <artifactId>Semantic-Daikon-Checker</artifactId>
++      <version>1.0</version>
++      <scope>system</scope>
++      <systemPath>${project.basedir}/../../../Semantic-Daikon-Checker/target/Semantic-Daikon-checker-1.0-SNAPSHOT-jar-with-dependencies.jar</systemPath>
++    </dependency>
+     <dependency>
+       <groupId>org.apache.hadoop</groupId>
+       <artifactId>hadoop-annotations</artifactId>
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+index 380343ded5e..29b58eed07d 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+@@ -17,6 +17,7 @@
+  */
+ package org.apache.hadoop.hdfs.server.datanode;
+ 
++import daikon.GlobalState;
+ 
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_ADDRESS_DEFAULT;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_ADDRESS_KEY;
+@@ -270,7 +271,9 @@
+     implements InterDatanodeProtocol, ClientDatanodeProtocol,
+         TraceAdminProtocol, DataNodeMXBean, ReconfigurationProtocol {
+   public static final Logger LOG = LoggerFactory.getLogger(DataNode.class);
+-  
++
++  public static DataNode instance = null;
++
+   static{
+     HdfsConfiguration.init();
+   }
+@@ -532,6 +535,9 @@ private static Tracer createTracer(Configuration conf) {
+ 
+     initOOBTimeout();
+     this.storageLocationChecker = storageLocationChecker;
++
++    LOG.info("DaikonLogger set DataNode");
++    instance = this;
+   }
+ 
+   @Override  // ReconfigurableBase
+@@ -756,6 +762,9 @@ ChangedVolumes parseChangedVolumes(String newVolumes) throws IOException {
+       }
+     }
+ 
++
++    GlobalState.triggerEvent();
++
+     return results;
+   }
+ 
+@@ -1848,6 +1857,9 @@ public DatanodeRegistration getDNRegistrationForBP(String bpid)
+     if(bpos==null || bpos.bpRegistration==null) {
+       throw new IOException("cannot find BPOfferService for bpid="+bpid);
+     }
++
++    GlobalState.triggerEvent();
++
+     return bpos.bpRegistration;
+   }
+   
+@@ -2328,6 +2340,9 @@ private void reportBadBlock(final BPOfferService bpos,
+   void transferBlock(ExtendedBlock block, DatanodeInfo[] xferTargets,
+       StorageType[] xferTargetStorageTypes, String[] xferTargetStorageIDs)
+       throws IOException {
++
++    GlobalState.triggerEvent();
++
+     BPOfferService bpos = getBPOSForBlock(block);
+     DatanodeRegistration bpReg = getDNRegistrationForBP(block.getBlockPoolId());
+ 
+@@ -3391,6 +3406,7 @@ public DatanodeID getDatanodeId() {
+   @VisibleForTesting
+   public void clearAllBlockSecretKeys() {
+     blockPoolTokenSecretManager.clearAllKeysForTesting();
++    GlobalState.triggerEvent();
+   }
+ 
+   @Override // ClientDatanodeProtocol
+@@ -3442,6 +3458,8 @@ public void checkDiskError() throws IOException {
+     } else {
+       LOG.debug("checkDiskError encountered no failures");
+     }
++
++    GlobalState.triggerEvent();
+   }
+ 
+   private void handleVolumeFailures(Set<FsVolumeSpi> unhealthyVolumes) {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+index 99ad6f2eb07..6379923e5e2 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+@@ -17,6 +17,8 @@
+  */
+ package org.apache.hadoop.hdfs.server.namenode;
+ 
++import daikon.GlobalState;
++
+ import static org.apache.commons.text.StringEscapeUtils.escapeJava;
+ import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.FS_TRASH_INTERVAL_DEFAULT;
+ import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.FS_TRASH_INTERVAL_KEY;
+@@ -424,6 +426,9 @@ private void logAuditEvent(boolean succeeded, String cmd, String src,
+   private void logAuditEvent(boolean succeeded,
+       UserGroupInformation ugi, InetAddress addr, String cmd, String src,
+       String dst, FileStatus status) {
++
++    GlobalState.triggerEvent();
++
+     final String ugiStr = ugi.toString();
+     for (AuditLogger logger : auditLoggers) {
+       if (logger instanceof HdfsAuditLogger) {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNode.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNode.java
+index 74757e563a6..e1f737f5d76 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNode.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNode.java
+@@ -237,6 +237,8 @@
+     HdfsConfiguration.init();
+   }
+ 
++  public static NameNode instance = null;
++
+   private InMemoryLevelDBAliasMapServer levelDBAliasMapServer;
+ 
+   /**
+@@ -1030,6 +1032,9 @@ protected NameNode(Configuration conf, NamenodeRole role)
+         DFS_HA_NN_NOT_BECOME_ACTIVE_IN_SAFEMODE,
+         DFS_HA_NN_NOT_BECOME_ACTIVE_IN_SAFEMODE_DEFAULT);
+     this.started.set(true);
++
++    LOG.info("DaikonLogger set NameNode");
++    instance = this;
+   }
+ 
+   private void stopAtException(Exception e){
